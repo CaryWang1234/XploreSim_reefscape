@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>XploreSim REEFSCAPE · 2025 FRC match simulator and tactical planner</title>
+    <meta name="description" content="A tick-level simulator of the 2025 FRC game REEFSCAPE, built from the game manual: branch inventory, cage climbing, fouls, and a replay you can scrub." />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <div>
+          <h1>XploreSim · REEFSCAPE</h1>
+          <p class="sub">2025 FIRST Robotics Competition · manual V13 (§6) / V11 (§7) · every constant is a clause or a labelled estimate</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <div class="chip" id="chip-status">Ready</div>
+        <button class="btn ghost" id="btn-tab-rules" type="button">Rule sources</button>
+        <button class="btn ghost" id="btn-tab-data" type="button" title="Every figure on this page was measured on the current build, with the script that produced it next to it">Measured data</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel setup" aria-labelledby="h-setup">
+        <div class="panel-head">
+          <h2 id="h-setup">Rosters and scenario</h2>
+          <p class="hint">Edit the ROBOT specs, choose the CAGE heights, run a match. Speeds and manipulation times are estimates; the rule limits they sit inside are not.</p>
+        </div>
+
+        <div class="setup-grid">
+          <div class="alliance-block blue">
+            <h3>Blue ALLIANCE</h3>
+            <label class="pick">Preset
+              <select id="preset-blue"></select>
+            </label>
+            <p class="hint" id="preset-note-blue"></p>
+            <div class="roster" id="roster-blue"></div>
+            <label class="pick">Baseline
+              <select id="sel-blue-kind">
+                <option value="greedy">Greedy cycle bot</option>
+                <option value="ai">Planner (model + re-plan)</option>
+                <option value="random">Random intent</option>
+              </select>
+            </label>
+            <p class="hint defend" title="A named seat stops collecting CORAL and shadows the nearest opponent who is OUT of their own REEF ZONE or BARGE ZONE — G427 gives the other ALLIANCE a MAJOR FOUL for contact inside it whoever started it. The seat still spends what it is carrying and still climbs in the endgame. Measured over 48 paired MATCHes on two seed bases: one defender takes 7.0 ± 1.7 points off the pressed ALLIANCE's total and costs its own ALLIANCE 5.9 ± 1.9 — with §7.4.4 switched off the take is 5.5 ± 1.4 and the own cost 6.4 ± 1.7, so the cards and the RED that ends a MATCH are worth about 1.5 points of the take. Two defenders take 7.0 ± 1.7 off for 15.6 ± 2.9 of their own: the second seat buys nothing, it only doubles the machine that is not cycling.">Defend
+              <label><input type="checkbox" class="defend" data-side="blue" data-slot="0" />1</label>
+              <label><input type="checkbox" class="defend" data-side="blue" data-slot="1" />2</label>
+              <label><input type="checkbox" class="defend" data-side="blue" data-slot="2" />3</label>
+            </p>
+            <div class="hp-row" id="hp-blue"></div>
+            <h4>CAGE heights (deep = 12 pts)</h4>
+            <div class="cages" id="cages-blue"></div>
+          </div>
+          <div class="alliance-block red">
+            <h3>Red ALLIANCE</h3>
+            <label class="pick">Preset
+              <select id="preset-red"></select>
+            </label>
+            <p class="hint" id="preset-note-red"></p>
+            <div class="roster" id="roster-red"></div>
+            <label class="pick">Baseline
+              <select id="sel-red-kind">
+                <option value="greedy">Greedy cycle bot</option>
+                <option value="ai">Planner (model + re-plan)</option>
+                <option value="random">Random intent</option>
+              </select>
+            </label>
+            <p class="hint defend" title="A named seat stops collecting CORAL and shadows the nearest opponent who is OUT of their own REEF ZONE or BARGE ZONE — G427 gives the other ALLIANCE a MAJOR FOUL for contact inside it whoever started it. The seat still spends what it is carrying and still climbs in the endgame. Measured over 48 paired MATCHes on two seed bases: one defender takes 7.0 ± 1.7 points off the pressed ALLIANCE's total and costs its own ALLIANCE 5.9 ± 1.9 — with §7.4.4 switched off the take is 5.5 ± 1.4 and the own cost 6.4 ± 1.7, so the cards and the RED that ends a MATCH are worth about 1.5 points of the take. Two defenders take 7.0 ± 1.7 off for 15.6 ± 2.9 of their own: the second seat buys nothing, it only doubles the machine that is not cycling.">Defend
+              <label><input type="checkbox" class="defend" data-side="red" data-slot="0" />1</label>
+              <label><input type="checkbox" class="defend" data-side="red" data-slot="1" />2</label>
+              <label><input type="checkbox" class="defend" data-side="red" data-slot="2" />3</label>
+            </p>
+            <div class="hp-row" id="hp-red"></div>
+            <h4>CAGE heights (deep = 12 pts)</h4>
+            <div class="cages" id="cages-red"></div>
+          </div>
+        </div>
+        <label class="check" title="With two different trios on the field, a score gap says as much about the machines as about the driving. Tick this to put Blue's trio on both sides, which is what makes a batch a policy comparison.">
+          <input type="checkbox" id="chk-mirror" />
+          <span>Red follows Blue (mirror) — unticked, this is the 2025 Einstein Final</span>
+        </label>
+
+        <details class="advanced">
+          <summary>Match settings</summary>
+          <div class="adv-grid">
+            <label class="pick" title="The layout seed, and every random draw in the MATCH: the CORAL STATION queue length, each ROBOT's tempo for this MATCH, each HUMAN PLAYER's form. Same seed, same MATCH.">Seed
+              <input type="number" id="inp-seed" value="12345" min="1" step="1" />
+            </label>
+            <label class="pick" title="[estimate] How far apart two copies of one ROBOT DESIGN are allowed to be in a MATCH: every timed action stretches and every rate shrinks by the same draw, and each HUMAN PLAYER's accuracy gets its own. 0 makes a mirror MATCH one process played twice, which is how both ALLIANCES land on the same number.">Machine spread %
+              <input type="number" id="inp-jitter" value="20" min="0" max="60" step="5" />
+            </label>
+            <label class="check" title="Every clause the engine adjudicates: G403/G405/G418/G421/G425/G427/G428 contact and zone tests, plus the §7.4.4 pair below. Off = an ablation that prices the whole foul model.">Model fouls
+              <input type="checkbox" id="chk-fouls" checked />
+            </label>
+            <label class="check" title="§6.5.3 gives the Coopertition Point to QUALIFICATION MATCHES, and G418 only hands the opponent the BARGE RP in a Qualification MATCH (G410 and G428 hand theirs in either). On = qualification, which is what the ledger columns are read from.">Qualification scoring
+              <input type="checkbox" id="chk-qual" checked />
+            </label>
+            <label class="check" title="§6.1: an ALLIANCE's NET has two feeders — its HUMAN PLAYER throwing the ALGAE the opponent pushed through their PROCESSOR, and a ROBOT lifting one in itself. Off removes the first, which is the ablation that prices the chain. The second is a ROBOT property (`NET lift s` on the card) and stays whatever this says.">NET throws by HUMAN PLAYER
+              <input type="checkbox" id="chk-hp-net" checked />
+            </label>
+            <label class="check" title="A drivetrain builds its spin up against the carpet and bleeds it off, so a heading change is a trapezoid. Off = the old one-tick snap, which is the control the ramp is measured against.">Turn ramp (angular acceleration)
+              <input type="checkbox" id="chk-turn-ramp" checked />
+            </label>
+            <label class="check" title="Bumper contact exchanges momentum along the contact normal: the cars meet, stop and slide around instead of grinding into each other. Off = positional separation only.">Bumper momentum exchange
+              <input type="checkbox" id="chk-contact" checked />
+            </label>
+            <label class="check" title="§6.5.1 scores an L2-L4 CORAL only if the BRANCH is inside the volume of the CORAL, so a placement has to be roughly lined up: the ROBOT turns to the branch before it pushes, and a piece put in off-axis falls back onto the carpet. The per-level DROP % on each card is what that costs. Off = every branch fills, which is the replay this model was committed before it existed.">CORAL can miss
+              <input type="checkbox" id="chk-place-risk" checked />
+            </label>
+            <label class="check" title="§7.4.4: G423 (damage or functional impairment) and G424 (a deliberate tip), one call per collision and only the more punitive of the two, MAJOR FOUL + YELLOW CARD — and a second YELLOW in the same MATCH is a RED, which DISABLES the ROBOT for the rest of it. Two fleets that never meet commit none; with one defender on the FIELD it reads 0.23 a MATCH (11 G423 over 48). Off = the ablation.">Opponent contact fouls
+              <input type="checkbox" id="chk-contact-fouls" checked />
+            </label>
+            <label class="check" title="Draw the REEF ZONE / BARGE ZONE outlines and the level labels.">Zone outlines
+              <input type="checkbox" id="chk-labels" checked />
+            </label>
+            <label class="check" title="Dashed line from each ROBOT to the place it is driving to.">Drive targets
+              <input type="checkbox" id="chk-targets" checked />
+            </label>
+            <label class="check" title="Seat numbers on the ROBOT plates.">Robot numbers
+              <input type="checkbox" id="chk-numbers" checked />
+            </label>
+          </div>
+        </details>
+
+        <div class="run-row">
+          <button class="btn primary" id="btn-run" type="button">Play one match</button>
+          <button class="btn" id="btn-new" type="button" title="Roll a fresh seed, play that MATCH and show it. The seed field is what makes a MATCH repeatable: the same number is the same MATCH, so a New match you like can be replayed by copying it back.">New match</button>
+          <button class="btn" id="btn-batch" type="button" title="Same trio on both ALLIANCES: the mean margin is the field-leak test, not a result">Mirror batch</button>
+          <button class="btn" id="btn-bench" type="button" title="Greedy against random, so the baselines prove they are discriminating">Compare baselines</button>
+          <div class="progress" id="progress" hidden><div class="bar" id="progress-bar"></div><span id="progress-label"></span></div>
+        </div>
+      </section>
+
+      <section class="panel field-panel" aria-labelledby="h-field">
+        <div class="panel-head">
+          <h2 id="h-field">Field</h2>
+          <p class="hint" id="field-sub">Replays here after a run. <span class="kbd">F</span> fullscreen (Esc leaves) · <span class="kbd">space</span> pause · <span class="kbd">[</span> <span class="kbd">]</span> step fouls and climbs · <span class="kbd">Home</span>/<span class="kbd">End</span> ends · arrows ±1 s</p>
+        </div>
+
+        <!-- Left-to-right follows the canvas: this field puts blue's REEF at x=144 and red's at 546, so BLUE
+             is the left half and its score box has to be the left one. (The 2026 build runs its X axis the
+             other way — red ALLIANCE WALL at 0 — and so lists RED first. Both pages are correct for their
+             own picture; only copying the order across was wrong.) -->
+        <div class="scoreboard">
+          <div class="score blue">
+            <span class="tag">BLUE</span>
+            <strong id="score-blue">—</strong>
+            <span class="teams" id="teams-blue">—</span>
+          </div>
+          <div class="clock">
+            <div class="period" id="period-label">—</div>
+            <div class="timer" id="timer-label">2:30</div>
+            <div class="inventory-strip" id="inventory-strip" aria-live="polite"></div>
+            <div class="margin" id="margin-label">—</div>
+          </div>
+          <div class="score red">
+            <span class="tag">RED</span>
+            <strong id="score-red">—</strong>
+            <span class="teams" id="teams-red">—</span>
+          </div>
+        </div>
+
+        <div class="foul-strip" id="foul-strip"></div>
+
+        <div class="canvas-wrap">
+          <canvas id="field" width="1380" height="680" aria-label="REEFSCAPE field"></canvas>
+        </div>
+
+        <div class="transport">
+          <button class="btn small" id="btn-play" type="button">Play</button>
+          <div class="scrub-wrap">
+            <input type="range" id="rng-scrub" min="0" max="0" value="0" step="1" aria-label="Replay position" />
+            <div class="scrub-marks" id="scrub-marks" role="list" aria-label="Fouls, climbs and faults in this match"></div>
+          </div>
+          <button class="btn small" id="btn-ev-prev" type="button" title="Jump to the previous foul, climb or fault ([)">‹ event</button>
+          <button class="btn small" id="btn-ev-next" type="button" title="Jump to the next foul, climb or fault (])">event ›</button>
+          <label class="speed">Speed
+            <select id="sel-speed">
+              <option value="0.5">0.5×</option>
+              <option value="1" selected>1×</option>
+              <option value="2">2×</option>
+              <option value="4">4×</option>
+            </select>
+          </label>
+          <button class="btn small" id="btn-fs" type="button" title="Fullscreen the FIELD (F to enter, Esc to leave). The hint line and the detailed ledger under the transport step aside — the same columns stay on the Read-out rail. If the host blocks true fullscreen, the panel fills the page instead.">Fullscreen</button>
+          <button class="btn small" id="btn-export" type="button" title="Save this match as a .json file (frames, rosters, result)">Export</button>
+          <button class="btn small" id="btn-import" type="button" title="Open a file written by Export and replay it">Import</button>
+          <input type="file" id="inp-import" accept=".json,application/json" class="visually-hidden" aria-label="Import a saved match" />
+        </div>
+
+        <!-- The detailed ledger lives here rather than in the scoreboard: Table 6-2 pays six columns, the
+             AUTO and TELEOP columns differ for CORAL, and a one-line summary under each score box could not
+             show which of the two ALLIANCES actually won the exchange. -->
+        <div class="score-detail" id="score-detail" aria-label="Detailed scoring"></div>
+      </section>
+
+      <aside class="panel output" aria-labelledby="h-output">
+        <div class="panel-head">
+          <h2 id="h-output">Read-out</h2>
+        </div>
+        <div class="tabs" role="tablist">
+          <button class="tab active" type="button" data-tab="insight">What just happened</button>
+          <button class="tab" type="button" data-tab="numbers">Numbers</button>
+          <button class="tab" type="button" data-tab="bench">Batch</button>
+          <button class="tab" type="button" data-tab="rules">Rule sources</button>
+          <button class="tab" type="button" data-tab="data">Measured data</button>
+        </div>
+        <div class="tab-body" id="tab-insight">
+          <h3>Events</h3>
+          <div class="events" id="events">Run a match to populate this.</div>
+        </div>
+
+        <div class="tab-body" id="tab-numbers" hidden>
+          <h3>Planner decisions</h3>
+          <p class="hint">Only filled in when an ALLIANCE is running the Planner. It is the log of the analytic model's re-solves: when it re-planned, what it measured for the fleet's pace, and when it moved the endgame commit. Read it against the field — a commit that lands at 6 s left is the same answer the <b>Numbers</b> measurements give every MATCH, and one that does not is the planner reacting to what that MATCH actually left on the REEF.</p>
+          <div class="results-grid" id="plan-out">
+            <p class="hint">Neither ALLIANCE is planning this MATCH — pick <b>Planner</b> under Baseline.</p>
+          </div>
+          <h3>Branch inventory</h3>
+          <table class="tbl" id="tbl-inventory"></table>
+          <h3>ROBOTs</h3>
+          <table class="tbl" id="tbl-robots"></table>
+        </div>
+
+        <div class="tab-body" id="tab-bench" hidden>
+          <p class="hint">Mean ± standard error. The button says which of the two batches you are about to run: <b>Mirror batch</b> puts one trio on both ALLIANCES, so its margin is the field-leak test and anything it prints is the model, not the strategy; with the mirror off the two ALLIANCES run their own presets, and the margin is a ROBOT comparison — read the two means.</p>
+          <div class="results-grid" id="batch-out">
+            <p class="hint">Nothing measured yet.</p>
+          </div>
+        </div>
+
+        <div class="tab-body" id="tab-rules" hidden>
+          <p class="hint">Values the manual writes down, with the clause they come from.</p>
+          <div class="rules-grid">
+            <table class="tbl" id="tbl-points"></table>
+            <table class="tbl" id="tbl-arena"></table>
+            <table class="tbl" id="tbl-fouls"></table>
+          </div>
+          <p class="hint">Three entries in that table are worth the reason. G409 and G412 are blocked by construction: <code>engine.js</code> refuses a second CORAL or a second ALGAE (<code>if (rb.coral &gt;= 1) return</code>) and a placement is only legal with the BUMPERS inside the ALLIANCE'S own REEF ZONE, so the action set cannot produce either foul. G420 is blocked for a different reason — the mesh is display geometry, never a collider, and the ROBOT's own deposit (<code>score-net</code>) is made from <em>beside</em> it, because §6.5.1 only counts an ALGAE that is not touching a ROBOT of that ALLIANCE; nothing in the action set reaches into the opponent's NET either. G410, G411 and G426 are the honest gaps: no de-score, no ALGAE-on-REEF and no collusion behaviour exists, so a team that won the CORAL RP by de-scoring the opponent's REEF is not something this build can lose to.</p>
+          <p class="hint">G419 changed band on the way past. It used to read <b>reach</b> — the ANCHORS hang above 5 ft, and R104 caps a ROBOT at 3 ft 6 in — and both halves of that were wrong: R104 measures the STARTING CONFIGURATION, not an elevator in play, and §5.4.1 lists the ANCHOR as including <em>the upper end surfaces and the inside surfaces of the CAGE pipes</em>, which in a DEEP CAGE sit 3 to 27 in off the carpet. A ROBOT is beside them every time it climbs. It is now <b>none</b>, which is the honest label: the engine's CLIMB is one atomic action, so there is no contact to adjudicate and no CAGE point to lose.</p>
+          <p class="hint">G421 (1 defender at a time) is charged, and it is the reason the <b>Defend</b> seats are opt-in: over <code>npm run verify</code>'s 18000 replay frames of 24 MATCHes, 883 held a single ROBOT on the opponent's half outside the BARGE ZONES and none held a second, so two greedy fleets give the clause nothing to do. Drive two machines across on purpose and it reads 50 fouls over 1 ROBOT, one of them escalating MINOR then MAJOR every 3 s as §7.4.3 says — that is guard 23b.</p>
+          <p class="hint">§7.4.4's three clauses are mutually exclusive by the manual's own note, so one collision is one call and only the most punitive one: G422 needs a COMPONENT outside the ROBOT PERIMETER, which no machine in this build has (the box R104 allows and nothing on it), so it is blocked by construction; G423 is damage or functional impairment, whether deliberate (item A) or simply by initiating contact (item B); and G424 needs the tip to be <em>deliberate</em>, because "tipping as an unintended consequence of normal ROBOT to ROBOT interaction" is explicitly not a violation. Both G423 and G424 are MAJOR FOUL + YELLOW CARD, or + RED CARD if the opponent cannot drive — and §6.6.2 makes a second YELLOW in the same MATCH a RED, which DISABLES that ROBOT for the remainder. Guard 23 drives a pressing fleet with the damage floor dropped to 20 in/s and the roll forced, and requires all of it: one call per collision, a card on every one, an impairment on the victim, a DISQUALIFICATION, and none of it with <code>contactFouls</code> off.</p>
+          <p class="hint">Neither baselines nor the shipped mirror ever commit a foul at all — greedy does not drive into an opponent, so across the guard batch the referee table is empty by strategy rather than by construction. That made <code>foulsOff</code> an unfalsifiable claim until <code>npm run verify</code> grew a guard that runs a fleet which does foul: one ALLIANCE parked, the other pressing the nearest car, and the build fails unless the ON direction charges (on the guard's seed it reads 133 fouls, <code>G403×9 · G405×2 · G421×100 · G425×21 · G427×1</code>, worth 786 points). The same guard is what proves G425 escalates MINOR to MAJOR on the second 3 s of an uncorrected PIN, which is the one severity in Table 6-3 that depends on how long the violation has already run.</p>
+        </div>
+
+        <div class="tab-body" id="tab-data" hidden>
+          <p class="hint">Every figure below was measured on this build by <code>npm run measure</code> or <code>npm run verify</code>, with its n and its standard error. Nothing here is quoted from a manual: the manual is in the tab to the left.</p>
+          <div class="data-grid">
+          <div>
+            <h3>What is a rule</h3>
+            <p>Field dimensions, element sizes and heights, point values, ranking-point definitions, foul severities, the 15 s AUTO / 135 s TELEOP clock, the 126 CORAL and 18 ALGAE staging, G409's one-CORAL-one-ALGAE carry limit, R103's 115 lb and R104's 120 in perimeter / 42 in height. Each is quoted with its clause in the tables above. The HUMAN PLAYER's part is rules too: 1 NET and 1 PROCESSOR per ALLIANCE (§5.4.2, §5.5), an ALGAE through a PROCESSOR rolls into the opponent's PROCESSOR AREA (§5.5), a PROCESSOR AREA holds at most 4 ALGAE (G435), no ALGAE may be entered during AUTO (G404), and only a HUMAN PLAYER may put them in (G433B). Scoring them is a different list: §6.1 gives both the PROCESSOR and the NET to the ROBOT, and gives the NET to the HUMAN PLAYER as well once the opponent has passed a ring through their PROCESSOR. The pieces' shapes are rules as well: §5.7.1's CORAL is an 11 in length of 4 in diameter white PVC and §5.7.2's ALGAE is a 16-16.5 in inflated ring, so the drawing gives an ALGAE four times the CORAL's diameter, and the NET hangs from the top of the BARGE on its own ALLIANCE's face (§5.4.2).</p>
+          </div>
+          <div>
+            <h3>What is an estimate</h3>
+            <ul>
+              <li><b>ROBOT tempo.</b> Drive speed, pick time, per-level placement time, the per-level odds a CORAL
+                does not stay on (<code>placeDrop</code>) and the aim error at which those odds start rising
+                (<code>placeTolDeg</code>), strip time, climb time, turn rate and reliability are model
+                assumptions in <code>web/js/model.js</code>, not rules. So is the drivetrain: <code>swerve</code>
+                / <code>tank</code> / <code>mecanum</code> set the sideways and reverse fractions and how the spin
+                ramps up, and R103/R104 say nothing about either. And so is the per-MATCH machine spread
+                (<b>Machine spread</b>, ±20% by default) that lets two copies of one design be different robots.
+                They are what a real team would measure in the pit.</li>
+              <li><b>Contact severity floors.</b> §7.4.4 says "damaging or functionally impairing" and "tipping",
+                not how hard: the in/s that counts as impairment, the fraction of speed a victim loses and for how
+                long, and the threshold above which a bump becomes a card are this build's, placed against
+                <code>npm run contact</code>'s measured distribution of its own collisions rather than against a
+                clause.</li>
+              <li><b>Field furniture placement.</b> The manual gives element sizes but the exact station / processor / CORAL-MARK offsets live in the field drawings, which are not transcribed yet. The NET is drawn on its own half of the BARGE band because §5.4.2 hangs it from the top of the truss; where along the 12 ft is not stated.</li>
+              <li><b>L1 trough capacity</b> as a number (24). The manual scores the trough by contact and support, not by slot count.</li>
+              <li><b>HUMAN PLAYER rates:</b> one NET throw per 2.2 s at 75%, one CORAL through the CHUTE per 1.4 s. The 4-ALGAE area limit is a rule; how fast they get thrown is not.</li>
+            </ul>
+          </div>
+          <div>
+            <h3>The ALGAE chain</h3>
+            <p>Reproduce every number in this card with <code>npm run measure</code> (n=24 mirror MATCHes, seedBase 9000). Processing an ALGAE is worth 6 to you and 4 x (the opponent's throw accuracy) to them, because the piece leaves your PROCESSOR through their PROCESSOR AREA (§5.5, §6.1). At the default rates an ALLIANCE whose own HUMAN PLAYER makes no throw scores <b>261.0 ± 2.5</b> instead of <b>274.8 ± 3.8</b>, and crippling the <em>opponent's</em> HUMAN PLAYER swings the margin the other way by <b>25.9 ± 3.5</b> (<b>281.1 ± 3.1</b> against <b>255.3 ± 2.4</b>): the two ends of the chain are the same 4-point leg, seen from either side of it. Cutting their area limit to 1 ALGAE takes the MATCH's NET column from <b>16 to 13</b> and its G435 overflow count from <b>2 to 5</b> and reads <b>271.2 ± 3.0</b>; slowing the throws to one per 4 s reads <b>273.5 ± 3.4</b> with NET 15 and overflow 3, because at 2.2 s the queue is not what is holding the NET back.</p>
+            <p>The CHUTE has one hard side and one soft one: slowing the feed to 3 s per CORAL reads <b>265.0 ± 3.6</b> while speeding it to 0.5 s reads <b>275.2 ± 3.9</b>, against the default 1.4 s at <b>274.8 ± 3.8</b>. Ten points of that is separable at n=24 and 0.4 is not, so what the model says is that a fleet of these tempos starves when the HUMAN PLAYER is slow and is already fed when it is fast — which is the opposite of the reading this card carried while the STATION queue was the binding constraint.</p>
+          </div>
+          <div>
+            <h3>The NET's other feeder</h3>
+            <p>§6.1 gives the NET two subjects: the HUMAN PLAYER throws into it, and a ROBOT scores in it. The build had only the first, argued from §5.4.2's 6 ft 4 in mesh against R104's 3 ft 6 in — but R104 measures the STARTING CONFIGURATION, not an elevator in play, and Table 6-2 pays the NET in the AUTO column, where G404 bars only the HUMAN PLAYER. So <code>score-net</code> exists, taken from beside the mesh because G420 forbids contacting it and §6.5.1 counts a ring only while no ROBOT of that ALLIANCE is touching it. The reach is a ROBOT property: <b>NET lift s</b> on the card, 0 = cannot clear the border. The shipped trio carries one — <b>1.9 / 1.4 / 2.05 s</b>, each machine's own L4 placement time plus [estimate] 0.5 s, because a ROBOT that lands a CORAL at 72 in clears a border 76 in up and a 16 in ring is the wider piece. No 2025 source prints which machines had the height, so it is derived from the ledger that has been read line by line rather than asserted: <code>2025cmptx_f1m1</code>'s Johnson A1 totals 295 as 63 AUTO CORAL + 145 tele CORAL + 36 NET + 9 LEAVE + 36 DEEP + 6 FOUL, which is nine ALGAE in the NET and <b>none in the PROCESSOR</b> — those nets were lifted in, not thrown up. The golden fingerprint moved from <code>fa67df3a</code>'s 293-305 to <code>65be7627</code>'s <b>251-247</b>, and on that seed both ALLIANCES now bank 9 NET with every ring lifted in by a ROBOT and no PROCESSOR column at all. 0 stays the ablation.</p>
+            <p>The two arms disagree on purpose (n=24, mirror and head-to-head, seedBase 9000). The shipped trio against the same trio with the reach forced back to 0 reads <b>274.8 ± 3.8</b> / <b>273.1 ± 2.9</b> against <b>301.6 ± 2.7</b> / <b>301.0 ± 2.9</b>, i.e. <b>−26.8 ± 4.2</b> points a MATCH (23/24 scores differ). Forcing all six machines to one lift time instead: 1.2 s <b>−45.0 ± 2.7</b> (24/24), 1.9 s <b>−21.3 ± 4.0</b> (24/24, and <b>−28.1 ± 3.5</b> on a second seed base, so the sign is not sample-dependent), 3 s <b>−4.5 ± 2.2</b> (22/24). One side having it against a side without: blue <b>290.5 ± 2.1</b> against red <b>280.2 ± 3.2</b>, margin <b>+10.3 ± 4.0</b> and a paired shift of <b>+9.7 ± 3.9</b> (23/24). Both being able to do it is worse for both, and one being able to do it is worth about ten points, because the ALGAE in <em>your</em> NET are the pieces your <em>opponent</em> pushed through their PROCESSOR (§5.5): a fleet that lifts its own rings in refuses to feed the goal it is scoring at — on the seed the table prints, the 1.2 s field runs PROC 8 / NET 18 with 10 of them lifted, against the control's PROC 18 / NET 17 with none — and withholds the 2-in-each-PROCESSOR Coopertition with them. Greedy bids the two routes on margin per second, and <code>npm run verify</code>'s guard 21 holds the books shut over 16 MATCHes: the action fired in all 16 at <b>11.1</b> deposits a MATCH, every one of the 18 staged ALGAE still accounted for, no deposit ever made from the opponent's half, and <b>0</b> deposits on the same seeds with the reach forced to 0.</p>
+          </div>
+          <div>
+            <h3>The physics</h3>
+            <p>Same harness, but every arm is paired on identical seeds, because the seed spread of this engine is several points and two independent means would swallow a real effect. A ROBOT is R104's 120 in perimeter as a 30 in square, oriented by a heading integrated under its drivetrain; the REEF is its convex hexagon; LEAVE and PARK are judged on the BUMPERS (§6.5.2). Switching the spin ramp off costs <b>+9.4 ± 3.0</b> points on the 9000 seed base with all 24 scores different and <b>+6.8 ± 2.8</b> on the 21000 base (22/24), and the guard's 48-seed paired run reads <b>5.8 ± 2.2</b> with 45/48 different: turning costs time, and one seed base alone has called this noise before.</p>
+            <p>The bumper momentum exchange is worth <b>+6.7 ± 2.9</b> points (<b>+5.8 ± 3.5</b> on the second base, <b>0.6 ± 2.3</b> in the guard's 16-MATCH paired run) — which is not what this card used to claim, and the reason it changed is worth more than the number. It used to read <b>+53 ± 14</b>, because the thing the bounce was doing was shoving three machines out of the pile-up they fell into at their own CORAL STATION. That job is now done by an explicit escape (see the card below), so what is left of the impulse is what it physically is: pairs spend <b>3.2%</b> of their frames in contact as shipped, and taking the exchange out moves that share by <b>0.67 ± 0.28</b> percentage points.</p>
+            <p>The HUMAN PLAYER's throws are the biggest single mechanism in this column: turning them off costs <b>18.4 ± 3.2</b> a MATCH over 24 paired seeds, 22/24 scores different. The drivetrain does buy throughput too. Every ROBOT on tank instead of swerve costs about <b>29 points</b> a MATCH (<b>253.6</b> against <b>282.8</b>, each played as its own 24-MATCH mirror on both seats, and 253.8 against 275.5 in the guard's 16-MATCH run), because a machine that cannot strafe spends half a trip backing up and turning. Mecanum, which strafes at 0.62 of its forward rate, is level with swerve (<b>280.2</b> against <b>282.8</b>): at these tempos partial strafing is already enough, so the cliff the model finds is at "no sideways at all", not at "some". All of these fractions are estimates — R103 and R104 say nothing about drivetrains.</p>
+          </div>
+          <div>
+            <h3>Why the two ALLIANCES score differently</h3>
+            <p>A mirror MATCH used to be one process played twice: the same trio, a point-symmetric field, a deterministic tick. With <b>Machine spread</b> at 0 and a CORAL that cannot miss it still is, and over 96 seeds that arm tied outright <b>9</b> times — not a finding about the game, just the model having no way to tell the two sides apart. Two things take that apart: every ROBOT draws one tempo factor per MATCH (±20% by default, the <b>Machine spread</b> field), and each HUMAN PLAYER draws its own form. The spread alone takes the ties on that risk-off arm from <b>9 to 5</b>. On the shipped arm, where a miss is its own draw per alliance, the same 96 seeds read a <b>9.4 ± 0.8</b> mean |margin| at ±0%, <b>11.0 ± 1.0</b> at ±10%, <b>13.5 ± 1.0</b> at ±20%, and <b>19.7 ± 1.4</b> at ±40%; the exact-tie count bounces 7 → 6 → 3 → 4 across those arms, which is noise at n=96, so the guard asserts the |margin| and not the ties. The results table prints the factor next to each ROBOT, so you can see which alliance got the slower machines.</p>
+            <p>The three real 2025 Einstein Field finals were 295-281, 274-285 and 276-293 (margins 14, 11, 17), so the shipped ±20% now sits inside the bottom of that band and ±40% above its top — a bigger claim about two copies of one design than is worth making. What keeps the two sides from separating further is that both still drain the REEF's <em>branches</em> — 12 of 12 at every level, level after level — and the difference between them is mostly the TROUGH, which is the column the placement model leaves short (11.2 of its 24 against 15.0 when nothing can fall off).</p>
+            <p>The other half of the symptom was the page itself: <b>Play one match</b> replays whatever seed is in the field, so clicking it twice is the same MATCH down to the last tick. <b>New match</b> rolls a fresh seed and plays it, and the status chip names the seed you are watching so a result you want to keep can be replayed or exported.</p>
+          </div>
+          <div>
+            <h3>The pile-up that was faking a blowout</h3>
+            <p>A CORAL STATION sits in the pocket where the ALLIANCE WALL meets the guardrail, three ROBOTS can all want the same one, and nothing in the engine or the baseline ever said "give up". So a machine would arrive, be pushed back by its own teammates, drive in again, and hold that spot — one of them still carrying a CORAL it had aimed at a branch for eighty seconds. Measured on the build where that was found, the 48-MATCH batch finished its weakest ALLIANCE on <b>13</b> of the 60 CORAL the field holds and its widest mirror gap was <b>132</b> points, between two identical trios. No 2025 field ever produced that; the Einstein finals were 17 points apart at their widest.</p>
+            <p>Now a ROBOT that is told to go, is more than 22 in from its waypoint, and closes less than 4 in over three seconds backs out along its own heading for 0.6 s and re-decides — which is what a driver does. Same batch on the corrected field: the weakest ALLIANCE floors at <b>34</b> CORAL, the 48-MATCH batch averages <b>543.5</b> and the widest mirror gap is <b>36</b> points; the backing-out manoeuvre was needed <b>11.2</b> times a MATCH. <code>unstickOff</code> on that same field floors the weakest ALLIANCE at the same <b>34</b> but reads <b>537.1</b> and <b>54</b>, so the escape is worth 6.4 points of batch total and 18 points of the worst-case gap rather than the collapse the first version printed. <code>unstickOff</code> is the ablation, and the guard reads both ends: switched off the fall has to come back, the gap has to widen, and if it ever fired more than 40 times a MATCH it would be the engine driving rather than repairing.</p>
+            <p>The same reasoning is in the baseline for the REEF: a ROBOT that has held a CORAL for four seconds against a branch pushes on to the next level down rather than parking in front of it, because the highest free branch is not always the reachable one.</p>
+          </div>
+          <div>
+            <h3>Does a CORAL stay on</h3>
+            <p>§6.5.1 pays an L2-L4 CORAL only "if the BRANCH is inside the volume of the CORAL", and a 4 in
+              BRANCH inside §5.7.1's 11 in piece leaves about 3.5 in of slop. So a placement is now two things: a
+              per-level <b>action time</b> (<code>placeSec</code> — 0.4 s on the TROUGH, 0.65 at L2, 1.0 at L3,
+              1.4 at L4 on the generic trio, and editable on each ROBOT card) and a per-level <b>chance of not
+              staying on</b> (<code>placeDrop</code>, <code>L1 0.02 / L2 0.06 / L3 0.13 / L4 0.22</code>, rising
+              with how far off the branch the machine was facing when it started pushing). The push does not
+              begin until the ROBOT is actually lined up — 26° of aim on the swerve trio, 20° on the tank
+              machine, because at 45° off a car a foot out points 11 in wide of the pipe — and the unaligned
+              seconds are spent turning, which is where half of the cost is. <b>CORAL can miss</b> is the switch;
+              with it off nothing falls and no time is paid for a swing.</p>
+            <p>What that is worth (n=24 mirror MATCHes, seedBase 9000): the TROUGH goes from <b>15.0 of its 24
+              filled to 11.2</b>, L2/L3/L4 do not move at 12.0 each, and <b>8.0 CORAL an
+              ALLIANCE-MATCH</b> ends up back on the carpet against 0.0. Paired on identical seeds the model costs
+              an alliance <b>−14.0 ± 3.1</b> points a MATCH, 23/24 scores different, and <b>−14.6 ± 2.6</b> on a
+              second seed base, 24/24. The column that goes short is the one the manual scores by contact rather
+              than by
+              slot, which is the reading TBA's playoff ledger gives too: its 2025cmptx alliance-sides averaged
+              15.1 trough CORAL, this fleet 11.2. One knob inside the model is worth naming: a ROBOT that has
+              been held off a branch for 4 s aims one level lower, and turning that retry-giving-up off moves
+              the same arms to 10.7 trough and 12.0 L4, with 8.6 CORAL fallen instead of 8.0 — a wash, roughly,
+              and it stays because a machine parked in
+              front of a blocked branch with a full gripper is not scoring either way. <code>npm run verify</code>
+              holds the geometry: on the golden seed 89 placements were booked, every one begun within 23° of its
+              branch, and 20 of them did not stay on;
+              <code>placementRisk: false</code> hands back the replay this round's ablation was re-based to
+              (<code>7856316</code>, 267-279, with <b>0</b> dropped CORAL in it).</p>
+          </div>
+          <div>
+            <h3>What defense is worth</h3>
+            <p>Three new actions, each priced rather than argued (<code>npm run measure</code>, 48 paired MATCHes
+              over two seed bases). <b>DEFEND</b> names a seat that stops collecting and shadows the nearest
+              opponent who is <em>out</em> of their own REEF or BARGE ZONE — pressing a car inside its own zone
+              donates a MAJOR to the other alliance under G427, whoever started it. One defender takes
+              <b>−7.0 ± 1.7</b> points off the pressed ALLIANCE's total and costs its own ALLIANCE
+              <b>−5.9 ± 1.9</b>; with §7.4.4 switched off the take is <b>−5.5 ± 1.4</b> and the cost
+              <b>−6.4 ± 1.7</b>, so the cards and the impairment are worth about 1.5 points of the take. Two
+              defenders take <b>−7.0 ± 1.7</b> off for
+              <b>−15.6 ± 2.9</b> of their own: the second seat buys nothing, it only doubles the machine that is not
+              cycling. In this model defense is a negative-margin action, and the checkbox says so.</p>
+            <p>Stealing from the opponent's CORAL STATION and stripping their REEF are worth a fraction each, and
+              they point in opposite directions: switching the theft option off costs the fleet <b>0.6 ± 0.4</b> of
+              its own total and <b>0.2 ± 0.4</b> off the opponent, while switching the enemy REEF off <em>gains</em>
+              it <b>0.8 ± 0.4</b>. That is a result rather than a dead switch, and the NET reach made the second one
+              smaller: a machine that can lift its own ring is not eager to cross the field for one it has to push
+              through the opponent's PROCESSOR. Whether the machinery works at all is guard 24, which sends one
+              machine there on purpose — RED's queue went from 18
+              CORAL left to <b>5</b> while BLUE's went from 15 to <b>57</b>, 23 CORAL still got placed, and all 126
+              the MATCH stages are still accounted for — and takes the opponent's REEF from 9 rings to <b>0</b>
+              while booking 18 in its own PROCESSOR.</p>
+            <p>The contact fouls are rare, and the number that says so is <code>npm run contact</code>: two mirror
+              greedy fleets produced <b>27 collisions over 24 MATCHes on one seed base and 2 on the other</b>
+              (1.1 and 0.1 a MATCH), because each alliance works its own REEF.
+              The fleet that has collisions is the one fielding a defender — <b>799 and 784</b> over the same
+              two 24-MATCH runs, median 33 and 34, p90 112 and 109, p99 181 and 186 — so §7.4.4's damage floor sits
+              at that p90 (100) and
+              the tipping floor at its p99 (180; both were set against the wider press of an earlier build, p90
+              104/105 and p99 174/194, and the press that holds its stand-off now lands just under it). With one
+              defender the trio assesses <b>0.23 fouls a MATCH</b> (11 G423 over 48); the whole press bill is
+              <b>4.5 and 4.9 fouls a MATCH for 26.5 and 29.3 points</b>, and nearly all of it is <b>2.9 G427</b>
+              (contact inside a protected
+              zone) and <b>1.4 G418</b> (the opponent's CAGE), so a defence
+              study in this game is mostly a geometry study. Guard 23 forces the rest of the mechanism on a press
+              it drives itself: 6 calls in one MATCH, one per collision because §7.4.4's three clauses are mutually
+              exclusive, a card on every one, and 3 ROBOTS disqualified for the remainder. G421 — two ROBOTS with
+              their BUMPERS beyond the BARGE ZONE — never fires on shipped traffic (over 18000 frames, <b>883</b> held a
+              <em>single</em> ROBOT across and none held a second), so guard 23b parks two machines past the
+              opponent's BARGE ZONE on purpose and
+              reads the MINOR then the MAJOR every 3 s.</p>
+          </div>
+          <div>
+            <h3>The 2025 teams that are actually on this field</h3>
+            <p>The <b>Preset</b> menu gives each ALLIANCE its own trio: Johnson A1 (<b>1690</b> Orbit, <b>4414</b> HighTide, <b>2073</b> EagleForce) and Newton A1 (<b>2910</b> Jack in the Bot, <b>1323</b> MadTown, <b>4272</b> Maverick). The page opens with blue running Johnson and red running Newton, which is the best-of-3 that went 295-281, 274-285, 276-293, and the <b>Mirror</b> box folds the field back to one trio when a BATCH is supposed to mean strategy against strategy rather than machine against machine.</p>
+            <p>Two sources, kept apart because they answer different questions. TBA's own ledger for <code>2025cmptx_f1m1</code> (read 2026-10-11) gives the SCALE: Johnson filled 12/12/12 BRANCHES plus 23 trough CORAL — 59 pieces, 9 of them in AUTO — with 9 ALGAE in the NET and three DEEP CAGES for 295; Newton 12/12/11 plus 21, the same 9 in AUTO and 9 in the NET and three DEEP CAGES for 281. Statbotics' 2025 EPA export gives the RATIO between the three machines of an alliance (<code>total_game_pieces</code>: 25.59 / 22.27 / 12.39 for Johnson, 26.48 / 25.68 / 14.82 for Newton). Those EPA columns are expected contributions rather than tallies — 2910 is credited with 12.97 BARGE points, which is more than the 12 one DEEP CAGE pays — so they are only allowed to split the alliance ledger, never to set it.</p>
+            <p>What the presets then do, over 24 mirror MATCHes each, against what TBA recorded: <b>Johnson 58.1 CORAL an ALLIANCE against 59</b>, <b>Newton 58.8 against 56</b>, at <b>7.4</b> and <b>7.5</b> AUTO CORAL against 9, <b>8.8</b> and <b>8.9</b> in the NET against 9, and <b>2.96</b> and <b>2.98</b> DEEP CAGEs against 3. The generic trio underneath them scores 45.1 CORAL on the same seeds. The per-machine split comes out 22.7 / 22.5 / 13.0 and 22.9 / 22.2 / 13.7 against the 25.1 / 21.8 / 12.1 and 22.2 / 21.5 / 12.4 the two sources imply, which is close enough to be the same shape and not close enough to call it fitted.</p>
+            <p>One column does not match, and it is the whole difference in the TOTAL: those Einstein records show <b>0 PROCESSOR ALGAE and 9 in the NET</b> on every alliance-side of the playoff, which §6.1 says cannot happen (a NET throw needs the piece to have come through the opponent's PROCESSOR). The totals reconcile only if the PROCESSOR credit is simply missing from the playoff record — 63 + 145 + 36 + 9 + 36 + 6 fouls = 295 exactly. That is the shape the shipped reach now reproduces: the guard's preset runs bank <b>305.9</b> against the recorded 295 for Johnson and <b>307.5</b> against 281 for Newton, of which <b>23</b> and <b>22</b> points are a PROCESSOR column that record does not carry — down from the 54-point hole this card described while nothing could reach the mesh. What is left out of line is a row of the ledger rather than a column: <b>9.2</b> trough CORAL where the finals left 23 and 21, <b>42.7</b> AUTO CORAL points where Johnson took 63 and Newton 60, and <b>2.00</b> DEEP CAGEs where both hung three. Take the PROCESSOR column out of the generic trio's mean and it reads <b>249.4</b> against the 260.56 that playoff field averaged over its 32 alliance-sides.</p>
+          </div>
+          <div>
+            <h3>Current state</h3>
+            <p id="calibration-note">This is Stage 1 plus the HUMAN PLAYER, the 2026 build's physics, a per-MATCH machine spread, the 2025 Einstein finalists as presets the two ALLIANCES pick separately, the Stage 2 planner selectable per ALLIANCE, the placement model (a CORAL has to be lined up and can still fall off), the deny actions (DEFEND, the opponent's STATION and REEF as sources, §7.4.4 and G421), and a shipped NET reach on all three machines. On seed 12345 the generic mirror comes out <b>176 CORAL + 36 ALGAE + 9 LEAVE + 30 BARGE = 251</b> against <b>172 + 36 + 9 + 30 = 247</b>: 12 of 12 BRANCHES at every level on both sides, <b>10</b> and <b>7</b> of the trough's 24, all nine ALGAE on each side <b>lifted into its own NET by a ROBOT with none processed</b>, two DEEP CAGES and one SHALLOW. Against the one MATCH whose whole ledger has been read line by line — <code>2025cmptx_f1m1</code> — that trio over the guard's 48 alliance-sides (<code>npm run verify</code>) is at <b>42.7</b> AUTO CORAL points where Johnson took 63 and Newton 60, <b>8.8</b> LEAVE where both took 9, <b>11.9/12.0/12.0</b> of the three BRANCH rows where both filled all three, <b>9.2</b> trough CORAL where the finals left 23 and 21, <b>8.9</b> NET where both left 9, and <b>2.00</b> DEEP CAGES where both hung three. The PROCESSOR column is <b>3.4</b> rings (21 points) where that record carries none, down from the 8.9 rings / 54 points it ran before anything could reach the mesh, and the alliance mean with it is <b>269.9</b> against a playoff field that averaged <b>260.56</b> and topped out at 301.</p>
+            <p>What Stage 2 found before it built anything: <code>npm run headroom</code> ran the allocation knobs through the tick engine, and cycle <b>rate</b> looked worth nothing — every one of the REEF's 36 branch slots gets filled (12.0 on each of L4, L3 and L2 on both seed bases) while only 11.5 and 8.8 of the 24-piece trough do, so no plan can outwork the fleet on pieces. Two levers moved points. Committing to the CAGES with 6 s left instead of 20 s is worth <b>+10.8 ± 0.9</b> and <b>+11.9 ± 0.9</b> (n=24, two seed bases), and 12 s is worth <b>+7.6 ± 0.3</b> / <b>+8.0 ± 0.4</b>. And the queue at the CORAL STATION: each ALLIANCE has two pockets and the bid sends all three machines to the nearer one, which the engine's own counter books on <b>27.0%</b> of a fleet's <b>65.4</b> CORAL picks a MATCH, down to <b>17.7%</b> once a teammate on the corner is priced as seconds of this machine's drive. What the crowd <em>costs</em> did not survive the NET lift: the old read (7.29 s between two picks by the same machine when the later one began contested, against 6.27 s when it began alone) has inverted to <b>4.34 ± 0.18 s</b> contested against <b>6.83 ± 0.11 s</b> alone, which says it was a confound — a machine that never left its corner has a short drive — so the lever is priced off the MATCH instead, and on the arm the planner decides against one side spreading gets <b>+1.1 ± 2.0</b> own points (<code>npm run verify</code>'s queue guard; <code>npm run measure</code> reads <b>+2.1 ± 1.3</b> over 48 paired). The sweep is flat inside that: <b>+2.3 ± 1.6</b> and <b>+4.5 ± 1.4</b> at 0.45 s, <b>−0.9 ± 2.0</b> and <b>+1.5 ± 1.8</b> at the shipped 0.91 s, <b>+0.7 ± 2.3</b> and <b>+2.6 ± 1.6</b> at 1.6 s. The level order is mildly against the shipped answer (<b>−3.9 ± 3.3</b> and <b>−5.6 ± 3.6</b> for L3 before L4, <b>−9.7 ± 3.2</b> / <b>−6.7 ± 2.6</b> for L2 first) and steep at the bottom (<b>−31.3 ± 3.4</b> and <b>−25.2 ± 4.4</b> for working the trough first); rigid per-machine level bands cost <b>−8.6</b> to <b>−28.8</b>, and refusing to touch ALGAE costs <b>−43.0 ± 3.7</b> and <b>−40.0 ± 4.2</b>. The absolute numbers on this page are still a case to read with the PROCESSOR column in mind: with it the alliance mean is <b>269.9</b>, without it <b>249.4</b>, and the 2025 Einstein Field's 32 playoff alliance-sides averaged 260.56 and topped out at 301 (The Blue Alliance).</p>
+            <p>So the Planner under <b>Baseline</b> searches three fields against a fast analytic model — when the fleet commits to the CAGES, which machine (if any) works the opponent's ALGAE, and whether the fleet splits over both CORAL STATIONs — and re-solves through TELEOP on what the MATCH actually left: branch stock, ALGAE on both REEFs, which CAGE its allies already claimed, the fleet's own measured pace, and a machine lost to a card or an IMPAIRMENT. <code>npm run fastsim</code> validates the model: <b>7/7</b> of the plan pairs the engine can separate on each of two seed bases (of 15 tried), the commit window right in sign and size (<b>+10/+12</b> predicted against <b>+7.6 ± 0.3 / +10.8 ± 0.9</b> measured on one base and <b>+8.0 ± 0.4 / +11.9 ± 0.9</b> on the other), with one arm per base still more than four points off — the spread arm (<b>+11.6</b> measured against <b>+16.0</b> predicted) and the one-machine-on-ALGAE arm (<b>+11.2</b> against <b>+6.0</b>), which is why the two levers are priced off the engine's arms in <code>npm run verify</code> rather than off this model. On held-out seeds the queue guard holds the lever by itself: the model pays <b>2.0</b> from the whistle and <b>0.0</b> with 30 s left, where a flat bonus would read the same at both clocks, against an engine gain of <b>+1.1 ± 2.0</b> own points and <b>−3.1 ± 2.4</b> of margin when both fleets are told to spread; the engine books 27.0% of its 65.4 CORAL picks a MATCH as beginning with a teammate on the corner and 17.7% once the crowd is priced, and the 0-penalty bid reproduces the shipped MATCH point for point. The level order is not searched at all: <code>MEASURED_ORDER</code> pins it to L3-before-L4, the measured top of the list on the build that found it, so the planner answers L3-first on 48/48 MATCHes. It has been re-argued twice since — the NET lift, then the clock rules below — and the second reading is the honest one: the greedy fleets (which run none of the pinned rules) read L3-first against L4-first at <b>−3.9 ± 3.3</b> and <b>−5.6 ± 3.6</b>, while the planner asked the same question of itself on 24 paired seeds per base now answers <b>+2.6 ± 2.8</b> and <b>−4.4 ± 2.0</b>. Two bases that disagree in sign and average to nothing is what an unmeasurable axis looks like, and the pin stays because flipping it re-baselines every fingerprint for a reading that is not a finding.</p>
+            <p>Three rules the baseline leaves off are pinned into the planner instead of searched, each one found by reading the failure off the frames first. <b>A cycle has to fit the clock</b> (<code>cycleCutoffSec</code> 4 s): the planner used to end TELEOP holding <b>0.73</b> and <b>0.69</b> CORAL an ALLIANCE on the two seed bases, and <b>0.69</b> of those were picked up inside the last 20 s — a full REEF accounted for 0.00 — so a fetch is now refused unless the round trip fits with 4 s to spare, the same straight-line budget the AUTO routine runs. That takes the hold to <b>0.13</b>/<b>0.15</b> and was worth <b>+3.00 ± 1.43</b> and <b>+2.92 ± 0.88</b> combined points a MATCH when it was the only rule switched on; against the build that now runs all three the gate is a maximum, not a guess — <b>8</b> s costs <b>−5.75 ± 0.68</b> and <b>−3.08 ± 1.14</b> and <b>6</b> s costs <b>−1.50 ± 0.86</b> / <b>−1.33 ± 0.91</b>, because past the peak the machines are standing still rather than saving a trip. <b>The hopper gets spent before the CAGE</b> (<code>spendBeforeClimb</code>): the engine drops whatever a ROBOT carries when it hangs, which was costing the baseline <b>1.69</b> and <b>1.58</b> CORAL an ALLIANCE a MATCH and the planner 0.75 and 0.90; the rule spends the load only when the clock left covers both legs, so it cannot buy 4 points of CORAL with 6-12 of BARGE. <b>A piece a teammate is bound for is not chased</b> (<code>pieceSpread</code> 1.82 s of drive): two allies were aimed within 24 in of each other on a TAKE for <b>38.9-42.2 s</b> of a MATCH, about 10 s of it at one loose piece rather than at a station queue, and pricing the crowd takes that to <b>1.7 s</b> for <b>+5.82 ± 2.03</b> pooled over 96 paired seeds and <b>+10.60 ± 3.16</b> over 48 paired held-out seeds. All three together are <b>+11.85 ± 3.17</b> combined points a MATCH on held-out seeds, and the columns say where: ALGAE <b>+4.17</b>, BARGE <b>+1.96</b> (with <b>+0.23</b> DEEP against <b>−0.15</b> SHALLOW), CORAL <b>+1.79</b>, AUTO CORAL and LEAVE <b>+0.00</b>. The baseline keeps them switched off, because it is the yardstick and a yardstick that improves underneath the planner re-baselines every fingerprint; <code>npm run verify</code>'s time-sense guard checks each rule binds, keeps its score through its own mechanism, pays on held-out seeds, and that all three off values reproduce the shipped MATCH point for point.</p>
+            <p>The strength, from <code>npm run strength</code> over 96 paired mirror MATCHes on both seat orders: the planner beats the shipped baseline by <b>+15.6 ± 1.7</b> and <b>+17.3 ± 1.7</b> own-side, winning <b>84.4% ± 3.7</b> and <b>83.9% ± 3.8</b> from its seat (with the seats swapped the baseline wins <b>24.5% ± 4.4</b> and <b>18.8% ± 4.0</b>), and the best fixed rule (aim L3 before L4, commit with 6 s left) beats the same baseline by <b>+15.2 ± 1.7</b> and <b>+11.8 ± 1.7</b>. Planner against that rule reads <b>+3.9 ± 1.6</b> from blue and <b>−0.5 ± 1.8</b> from red on one base, <b>+3.9 ± 1.8</b> and <b>+0.5 ± 1.7</b> on the other — a pair mean of <b>+1.7</b> and <b>+2.2</b> — while the control that says what a zero would look like on this seed construction, the planner against itself, reads <b>+2.1 ± 1.8</b> and <b>+2.8 ± 1.7</b> in blue's favour and the fixed rule against itself <b>−0.3 ± 1.9</b> and <b>−0.6 ± 2.0</b>. So the honest reading is still that the search <em>reproduces</em> the best fixed rule, not that it beats it; what the pinned rules moved is the planner's own score (<b>283.9</b> → <b>287.1</b>) and its win rate over the baseline (<b>81.8%</b> → <b>84.4%</b>), and against a baseline that picks up the late pieces the planner declines, the margin over it is the last thing to move. What it adds is the queue it finds on its own: it turns the spread on in <b>11/24</b> and <b>16/24</b> MATCHes — less than the <b>18/24</b> it used to choose, because a fleet that no longer double-tasks a loose CORAL does not need to split its pockets as often — declines ALGAE duty in every arm on one base and in 23 of 24 on the other, and commits at 6 s in 48/48. Told about the queue in advance, the same table no longer gets ahead of it: <b>−2.1 ± 1.7</b> on one base and <b>+1.1 ± 1.9</b> on the other, where it was <b>−5.2</b> and <b>−3.4</b>. Against a field that does something — one machine pressing, three stripping this REEF, both at once — it beats the shipped baseline in six of six arms over 48 MATCHes per arm (<b>45.7 / 16.7 / 46.3</b> and <b>42.6 / 18.5 / 40.9</b> own-side margin against <b>30.4 / 0.6 / 30.5</b> and <b>32.4 / 2.5 / 33.6</b>) and the old fixed rule in six of six, but the table told about the queue now splits the six with it (<b>+1.4 / −1.8 / −1.5</b> and <b>+0.3 / +1.7 / −4.0</b>, <b>−0.65</b> averaged). What re-planning still has not bought is adaptivity: at ±40% and ±60% machine spread the margin over the fixed rule is <b>+7.0 ± 3.5</b> from one seat and <b>−2.3 ± 3.7</b> from the other (<b>+8.1 ± 4.6</b> / <b>−1.2 ± 4.4</b> at ±60%), which is the seat, not the re-solve — though the window it picks does move with the jitter a fixed rule cannot see (16/16 MATCHes commit at 6 s at ±0%, 14/16 at ±40%, 12/16 at ±60%). On held-out seeds the planner guard reads <b>+16.9</b> over the baseline (<b>19.9 ± 3.5</b> from blue, <b>13.9 ± 4.2</b> from red) and <b>+2.1</b> over the fixed rule, with 16/16 MATCHes committing inside 8 s and 16/16 re-planned away from their opening plan. The Numbers tab prints when it decided, and prints the three pinned rules next to it.</p>
+          </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <script type="module" src="js/ui.js"></script>
+  </body>
+</html>

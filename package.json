@@ -1,0 +1,23 @@
+{
+  "name": "xploresim-reefscape",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "2025 FRC REEFSCAPE match simulator and tactical planner, modelled from the game manual.",
+  "scripts": {
+    "check": "node scripts/check_web.mjs",
+    "verify": "node scripts/invariants.mjs",
+    "measure": "node scripts/measure.mjs",
+    "headroom": "node scripts/headroom.mjs",
+    "contact": "node scripts/contact.mjs",
+    "aicap": "node scripts/aicap.mjs",
+    "fastsim": "node scripts/fastsim.mjs",
+    "strength": "node scripts/strength.mjs",
+    "adaptive": "node scripts/adaptive.mjs",
+    "serve": "node scripts/serve.mjs",
+    "all": "node scripts/check_web.mjs && node scripts/invariants.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
