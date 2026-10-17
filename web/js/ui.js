@@ -1460,7 +1460,6 @@ function bind() {
     t.addEventListener('click', () => showTab(t.dataset.tab));
   }
   $('btn-tab-rules').addEventListener('click', () => showTab('rules'));
-  $('btn-tab-data').addEventListener('click', () => showTab('data'));
   $('rng-scrub').addEventListener('input', (e) => {
     stop();
     state.frame = Number(e.target.value);
