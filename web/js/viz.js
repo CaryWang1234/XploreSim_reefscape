@@ -2,7 +2,7 @@
 // static geometry from model.js, and never mutates anything, so the same frame always looks the same.
 
 import { layout, branchSlots, coralMarks, reefAlgae } from './model.js';
-import { FIELD, GEO, ROBOT_LIMITS, PIECES } from './rules.js';
+import { FIELD, GEO, ROBOT_LIMITS, PIECES, NET_LANES, NET_CAPACITY } from './rules.js';
 
 const INK = {
   carpet: '#10192a',
@@ -84,9 +84,13 @@ export function drawField(ctx, frame, opt = {}) {
     // §6.3.4.2 B stages one ALGAE on TOP of the CORAL at each CORAL MARK, so the ring has to be laid over
     // the pipe. Drawing it with the REEF's own ALGAE put it underneath and hid it.
     for (const side of ['blue', 'red']) {
-      const left = frame.reef?.[side]?.algaeMarks ?? 0;
+      const o = frame.reef?.[side];
       const marks = coralMarks(geo, side);
-      for (let i = 0; i < Math.min(marks.length, left); i++) drawAlgae(ctx, X, Y, S, marks[i].x, marks[i].y, 0.6);
+      const mask = o?.algaeMarksM;
+      const left = o?.algaeMarks ?? 0;
+      for (let i = 0; i < marks.length; i++) {
+        if (mask === undefined ? i < left : ((mask >> i) & 1) === 1) drawAlgae(ctx, X, Y, S, marks[i].x, marks[i].y, 0.6);
+      }
     }
   }
 
@@ -137,7 +141,7 @@ function drawAlgae(ctx, X, Y, S, x, y, scale = 1) {
 function hexPath(ctx, cx, cy, r) {
   ctx.beginPath();
   for (let k = 0; k < 6; k++) {
-    const a = (Math.PI / 3) * k; // vertices at 0,60,...: flats face the ±y guardrails
+    const a = (Math.PI / 3) * k + Math.PI / 6; // vertices at 30,90,...: flats face the ±x alliance walls
     const px = cx + r * Math.cos(a);
     const py = cy + r * Math.sin(a);
     if (k === 0) ctx.moveTo(px, py);
@@ -179,17 +183,26 @@ function drawReef(ctx, geo, frame, side, X, Y, S, opt) {
   // 12 branches per level, drawn at their real positions; the three levels are pulled apart radially
   // so a ring reads as L2 (inside) → L4 (outside) rather than as one overlapping pile. A scored CORAL is
   // a pipe sticking out along its branch, not a dot.
+  //
+  // Which branch is which comes from the frame's per-level bitmask, so a CORAL booked on the face at 150° is
+  // drawn on the face at 150°. Reading the counts and filling the first N slots in list order — what this did
+  // before — put every fleet's CORAL on the same faces regardless of where it actually placed them, and a
+  // REEF with 12 on L2 looked like 12 on the three faces the list happens to start with. A frame with no mask
+  // (a replay exported before the field carried the indices) falls back to that count fill.
   const occ = frame ? frame.reef[side] : null;
-  const counts = occ ? { L2: occ.L2, L3: occ.L3, L4: occ.L4 } : { L2: 0, L3: 0, L4: 0 };
+  const on = (lv, i) => {
+    if (!occ) return false;
+    const m = occ[`${lv}m`];
+    return m === undefined ? i < occ[lv] : ((m >> i) & 1) === 1;
+  };
   const levels = ['L2', 'L3', 'L4'];
   for (let li = 0; li < 3; li++) {
     const lv = levels[li];
     const f = LEVEL_RADIUS[lv];
-    const filled = counts[lv];
     for (let i = 0; i < SLOT.length; i++) {
       const wx = r.x + SLOT[i].x * f;
       const wy = r.y + SLOT[i].y * f;
-      const taken = i < filled;
+      const taken = on(lv, i);
       if (taken) {
         drawCoral(ctx, X, Y, S, wx, wy, (Math.atan2(SLOT[i].y, SLOT[i].x) * 180) / Math.PI, 0.46);
         if (li === 2) {
@@ -217,13 +230,21 @@ function drawReef(ctx, geo, frame, side, X, Y, S, opt) {
     ctx.stroke();
   }
 
-  // ALGAE left on this side (§6.3.4.2 A): three pairs riding on the BRANCHES. 16 in rings, so a pair on
-  // neighbouring branches does overlap, the way it does on the real REEF. The 1 on top of each CORAL MARK
+  // ALGAE left on this side (§6.3.4.2 A): one ring straddling the two BRANCHES of each of the six FACES.
+  // 16 in rings on pipes 13 in apart, so a ring always overlaps both of them, the way it does on the real REEF.
+  // The 1 on top of each CORAL MARK
   // (§6.3.4.2 B) is drawn after the loose pieces, because it rides over them.
-  const reefAlgaeLeft = occ ? occ.algaeReef ?? Math.min(6, occ.algae) : 0;
-  const slots = [];
-  for (const p of reefAlgae(geo, side)) slots.push(p, { x: p.x + 6, y: p.y });
-  for (let i = 0; i < Math.min(slots.length, reefAlgaeLeft); i++) drawAlgae(ctx, X, Y, S, slots[i].x, slots[i].y, 0.62);
+  //
+  // The frame's bitmask says WHICH rings are still there. Filling the first N of the list drew a REEF whose
+  // rings had been taken off one face as a REEF missing rings from whichever faces the list starts with, which
+  // is the same lie the BRANCHES above used to tell.
+  const rings = reefAlgae(geo, side);
+  const reefMask = occ ? occ.algaeReefM : undefined;
+  const reefLeft = occ ? occ.algaeReef ?? Math.min(rings.length, occ.algae) : 0;
+  for (let i = 0; i < rings.length; i++) {
+    const left = reefMask === undefined ? i < reefLeft : ((reefMask >> i) & 1) === 1;
+    if (left) drawAlgae(ctx, X, Y, S, rings[i].x, rings[i].y, 0.62);
+  }
   // The CORAL MARKS themselves (§6.3.4.1 A): a mark is a carpet position an 11 in CORAL lies across.
   for (const m of coralMarks(geo, side)) {
     ctx.strokeStyle = 'rgba(241,238,228,0.35)';
@@ -320,14 +341,28 @@ function drawNets(ctx, geo, frame, X, Y, S, opt) {
     ctx.lineWidth = Math.max(1.5, S(2));
     ctx.strokeRect(x0, y0, w, h);
     const scored = frame && frame.net ? frame.net[side] : 0;
-    // Three columns down the panel, 16 in rings shrunk to a third so nine of them fit the 4 ft x 12 ft
-    // mesh and still read as separate pieces. The count keeps the top strip to itself.
-    for (let i = 0; i < scored; i++) {
-      const col = i % 3;
-      const row = Math.min(4, Math.floor(i / 3)); // §6.3.4 stages 9 ALGAE an ALLIANCE, so 15 cells never fill; the clamp is for a strip-the-opponent match
-      drawAlgae(ctx, X, Y, S, n.x - n.w / 2 + (n.w * (col + 0.5)) / 3, n.y - n.d / 2 + (n.d * (row + 0.8)) / 6, 0.34);
+    // The 12 ft face splits along its length into three 4 ft patches, one per ROBOT (engine.js `netDeposit`),
+    // and each patch takes three 16 in rings across its 4 ft width (rules.js `NET_LANE_CAPACITY`). An imported
+    // MATCH recorded before lanes existed has no per-lane column, so its rings are spread round-robin rather
+    // than drawn as an empty NET.
+    const lanes = frame && frame.netLanes ? frame.netLanes[side] : null;
+    const counts = lanes ? lanes.slice() : [0, 0, 0];
+    if (!lanes) for (let i = 0; i < scored; i++) counts[i % NET_LANES] += 1;
+    const cap = frame && frame.netCap ? frame.netCap : NET_CAPACITY;
+    for (let c = 0; c < NET_LANES; c++) {
+      const cy = n.y - n.d / 2 + (c + 0.5) * (n.d / NET_LANES);
+      const bandH = n.d / NET_LANES;
+      for (let k = 0; k < counts[c]; k++) {
+        // three across the 4 ft width, then a second row inside the same patch if a widened capacity asks for it
+        drawAlgae(
+          ctx, X, Y, S,
+          n.x - n.w / 2 + (n.w * ((k % 3) + 0.5)) / 3,
+          cy + (Math.floor(k / 3) - 0.25) * bandH * 0.34,
+          0.34,
+        );
+      }
     }
-    text(ctx, `NET ${scored}`, x0 + w / 2, y0 + S(7), INK.text, S(11));
+    text(ctx, `NET ${scored}/${cap}`, x0 + w / 2, y0 + S(7), INK.text, S(11));
     if (opt.labels) text(ctx, side === 'blue' ? 'BLUE NET' : 'RED NET', x0 + w / 2, y0 - S(10), INK.dim, S(7));
   }
 }

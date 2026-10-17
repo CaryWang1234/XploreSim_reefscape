@@ -3,7 +3,7 @@
 // What this is NOT: a search over when to press. The tick engine's actions are already greedy about the next
 // piece, and `npm run headroom` measured that cycle RATE is not where the points are — the REEF's 60 slots and
 // the 9 ALGAE are never all reached, so no allocation can spend more than the fleet already does. What the
-// study found is one lever worth points (when the fleet commits to the CAGES: +11.3±1.1 and +11.9±0.7 for a
+// study found is one lever worth points (when the fleet commits to the CAGES: +13.0±0.9 and +14.3±1.1 for a
 // 6 s window over the shipped 20 s, on two seed bases).
 //
 // So the planner does two things. It re-solves the commit window and the ALGAE duty through TELEOP against what
@@ -19,9 +19,9 @@
 // see MEASURED_ORDER for the two readings.
 //
 // The window and the duty come from `fastsim.js`, the analytic model, and only on the axes `npm run fastsim`
-// validated: 7/7 of the engine-separable plan pairs ordered correctly on each of two seed bases, with the
-// commit window right in sign and within 2 points of size (the model +10.0/+12.0 against the engine's
-// +7.6 ± 0.3/+10.8 ± 0.9 at a 9000 base), and the duty arms ordered the way the engine orders them (guard 26).
+// validated: 8/8 of the engine-separable plan pairs ordered correctly on each of two seed bases, with the
+// commit window right in sign and within 3 points of size (the model +10.0/+8.0 against the engine's
+// +13.0 ± 0.9/+8.0 ± 0.4 at a 9000 base), and the duty arms ordered the way the engine orders them (guard 26).
 
 import { greedyPolicy } from './policy.js';
 import { LEVELS } from './engine.js';
@@ -30,54 +30,80 @@ import { TIME } from './rules.js';
 import { ALGAE_PER_ALLIANCE } from './model.js';
 
 // `npm run headroom` measured L3 before L4 and L4 before L3 as the two best fixed level orders when this was
-// written, everything below them by 6-31 points, and the order is pinned rather than searched so the planner
-// never flips machines that are already en route to a branch. It has been re-argued twice since: the NET reach
-// left the greedy fleets reading L3-first against L4-first at -3.9 ± 3.3 and -5.6 ± 3.6, and the clock rules
-// leave the planner against itself on 24 paired seeds per base at +2.6 ± 2.8 and -4.4 ± 2.0 — the two bases
-// disagree in sign and the pair averages to nothing. Flipping MEASURED_ORDER re-baselines every fingerprint in
+// written, everything below them by 4-37 points, and the order is pinned rather than searched so the planner
+// never flips machines that are already en route to a branch. It has been re-argued three times since, and the
+// third is this round's: L3-first against L4-first now reads +0.5 ± 4.3 and -0.9 ± 2.6, and the planner against
+// itself on the same two bases reads +2.1 ± 1.8 and +2.0 ± 2.0 — every one of those four sits inside its own bar,
+// which is what an unmeasurable axis looks like. Flipping MEASURED_ORDER re-baselines every fingerprint in
 // scripts/invariants.mjs for a reading that is not a finding, so the pin stays.
 const MEASURED_ORDER = ['L3', 'L4', 'L2', 'L1'];
 
 // The commit times the planner may choose, in seconds of MATCH left. 4 s is included because the model has to
-// be able to say "commit now"; the measured climb takes 4.46 s (mean, max 5.80) once the window opens.
+// be able to say "commit now"; the measured climb takes 4.81 s (mean, max 5.80) once the window opens.
 const WINDOWS = [4, 6, 8, 10, 12, 16, 20, 26];
 
-// The same scalar `npm run fastsim` fits offline (1.324 against this field's station queue), used as the
+// The same scalar `npm run fastsim` fits offline (1.613 on both seed bases since #123 moved the MARKs), used as the
 // starting point and then re-measured from the fleet's own placements.
 const SEED_EFFICIENCY = 1.32;
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const median = (a) => (a.length ? [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)] : null);
 
-// The planner's time sense and its one teamwork rule, pinned the same way the level order is. All three are
-// budget rules in `policy.js` that the baseline leaves off, and all three were measured on the mirror's
-// COMBINED alliance score, arm against control on the same seeds:
+// The planner's time sense, its two teamwork rules, its one defensive rule and its one AUTO rule, pinned the
+// same way the level order is. Every one is a rule in `policy.js` that the baseline leaves off, and every one was
+// measured on the mirror's COMBINED alliance score, arm against control on the same seeds. `npm run verify`'s
+// time-sense guard re-reads them on held-out seeds every build, and the four TELEOP off values reproduce the
+// shipped MATCH point for point:
 //
-//   cutoff 4 s  +3.00 ± 1.43 and +2.92 ± 0.88 — the fleet stops starting a cycle it cannot finish. It ended
-//               TELEOP holding 0.73/0.69 CORAL an ALLIANCE before the gate and 0.69 of those 0.69 were pieces
-//               picked up inside the last 20 s; the gate took the hold to 0.13/0.15. Re-run against the build
-//               that carries all three pins, the gate is a maximum: 6 s costs -1.50/-1.33 and 8 s costs
-//               -5.75 ± 0.68 / -3.08 ± 1.14, because past the peak the machines are not saving a wasted trip,
-//               they are standing still.
-//   spend       +3.33 ± 1.57 and +3.50 ± 0.96 with the cutoff — spend the hopper, then hang. The engine drops
-//               what a ROBOT carries when it climbs, which costs the baseline 1.69/1.58 CORAL an ALLIANCE a
-//               MATCH (+6.21 ± 0.67 and +6.04 ± 0.47 for the greedy fleet, whose climb-drops go to 0.00). The
-//               planner commits late enough that it only loses 0.75/0.90 that way, so on its own the rule is
-//               inside the bar (-0.25 ± 0.54, +0.58 ± 0.33); with the cutoff it removes most of what is left
-//               (0.21/0.48 -> 0.13/0.27).
-//   piece 1.82  +5.82 ± 2.03 pooled over 96 paired seeds, positive on both bases (+7.48 ± 2.88 at n=48 on the
-//               9000 base, +4.17 ± 2.63 on the 21000 one), and +6.93 ± 2.36 for the baseline fleet. A loose
-//               CORAL or ring a teammate is already bound for costs this machine 1.82 s of drive off the bid,
-//               which is 291 in at this field's cruise speed: enough to walk to the other source when there is
-//               one, not enough to abandon the REEF when there is not. It takes the two-allies-on-one-piece
-//               overlap from 8.7 s a MATCH to 1.7. 3.65 s and 7.30 s read IDENTICALLY (+5.94 ± 2.33 for both,
-//               because 3.65 s of drive is 584 in, longer than the FIELD is wide, so past about 2 s the penalty
-//               is a skip rather than a price); the graded value is kept because a rule that can still take the
-//               piece when nothing else is left is the one that does not strand a machine beside an empty REEF.
+//   cutoff 4 s  what the fleet still holds at the whistle goes from 0.83 to 0.10 CORAL an ALLIANCE, for
+//               12.7 ± 3.9 combined points a MATCH. The gate is a maximum, not a guess: an 8 s cutoff holds
+//               0.04 and drops 0.02 and costs -5.3 ± 1.4, because past the peak the machines are standing still
+//               rather than saving a trip.
+//   spend       the engine drops what a ROBOT carries when it hangs; for a baseline fleet the rule turns 1.69
+//               climb-dropped CORAL an ALLIANCE into 0.00 and is worth 8.3 ± 1.3 combined points a MATCH. It
+//               cannot buy 4 points of CORAL with 6-12 of BARGE.
+//   piece 1.82  11.5 ± 5.3 on 24 held-out paired seeds, and the two-allies-on-one-piece overlap goes from 1.9 s
+//               a MATCH to 0.5. A loose piece a teammate is already bound for costs this machine 1.82 s of drive
+//               off the bid — 291 in at this field's cruise speed: enough to walk to the other source when there
+//               is one, not enough to abandon the REEF when there is not. Past about 2 s the penalty is a skip
+//               rather than a price; the graded value is kept because a rule that can still take the piece when
+//               nothing else is left is the one that does not strand a machine beside an empty REEF.
+//   press 0.08  A PRESS IS BOUGHT WITH FOULS, NOT WITH SECONDS. `npm run measure`'s paired arms separate the two
+//               halves: one machine told to shadow the nearest opponent costs its own alliance -5.9 ± 1.7 of
+//               total and takes -2.8 ± 1.5 off the opponent's (48 paired seeds), which over the
+//               20.7 s a MATCH it spends in the ring is a take of about 0.29 a press-second. The same arm read on
+//               the MARGIN is -33.63 ± 3.12, or -1.626 a press-second, and the difference is the foul points
+//               a defender hands the other alliance (`npm run contact`: 7.7 and 6.1 fouls a MATCH for 45.8 and
+//               36.6 points, of which 244 over the 48 MATCHes are G427 for being inside a protected zone). 0.08 now sits below both
+//               readings rather than between them: it was written to keep the planner out of the press, and the
+//               arms only moved that way once the corrected REEF changed where the machines meet.
+//               `npm run verify`'s press guard reads what the price does buy — 0.0 s a MATCH with the rule off,
+//               1.2 s at the shipped price, 51.0 s once the price is
+//               raised to 3, where it costs itself 17.4 press fouls against the shipped 1.1. Two defenders are
+//               worse than one on both halves
+//               (-9.9 ± 2.5 own for -2.0 ± 1.4 off the opponent, against one machine's -5.9 ± 1.7 and -2.8 ± 1.5).
+//               This round replaced the page's six DEFEND
+//               checkboxes with this rule, because a duty the field prices at nothing was not a decision anyone
+//               should have to make by hand.
+//   AUTO crowd 0  THE AUTO routine is a SCRIPT (§6.4 — no driver input), and a three-machine script should not
+//               send all three at the same CORAL MARK. The lever prices an ally already aimed at the same point
+//               at seconds of this machine's drive, and for two rounds it was pinned at 1.5 s on +0.28 ± 0.05
+//               AUTO CORAL, +0.92 ± 0.23 STATION picks a MATCH and LEAVE +0.25 ± 0.12 over 144 paired
+//               alliance-sides. That read belonged to a field this build no longer has: #122 turned the REEF so a
+//               FLAT faces the ALLIANCE WALL (Figure 5-4) and put the six ALGAE on all six faces, and #123 moved
+//               the six CORAL MARKs to the wall side of the REEF and the fleet onto its own ROBOT STARTING LINE,
+//               where G303-D puts it.
+//               The lever still reaches a MATCH — 94 of the 144
+//               alliance-sides change their AUTO paths when it is paid — but re-read on this geometry
+//               the same arms give 0.06 ± 0.08 AUTO CORAL,
+//               0.08 ± 0.15 STATION picks and LEAVE 0.00 ± 0.00 — it buys no pieces worth the trip, and LEAVE has
+//               no part in it any more because the fleet starts on the line. `npm run verify`'s guard 30 re-reads
+//               it every round and
+//               fails if it ever buys more than 0.25 AUTO CORAL an ALLIANCE, which is what revives the pin.
 //
 // Off stays in `policy.js` because the baseline is the yardstick the planner is scored against, and a yardstick
 // that improves underneath it re-baselines every fingerprint in `scripts/invariants.mjs`.
-const PINS = { cycleCutoffSec: 4, spendBeforeClimb: true, pieceSpread: 1.82 };
+const PINS = { cycleCutoffSec: 4, spendBeforeClimb: true, pieceSpread: 1.82, autoDefend: true, pressTakePerSec: 0.08, autoCrowdSec: 0 };
 
 export function aiPolicy(side, opts = {}) {
   const order = opts.placeOrder ?? MEASURED_ORDER;
@@ -233,12 +259,12 @@ export function aiPolicy(side, opts = {}) {
     kind: 'ai',
     planLog: log,
     get plan() {
-      // The three pinned rules are read out of the policy that is actually running rather than repeated from
+      // The pinned rules are read out of the policy that is actually running rather than repeated from
       // `PINS`, so a caller that overrides one through `opts` cannot be shown the pinned value instead.
       return {
         ...plan,
         efficiency: +eff.toFixed(2),
-        pins: { cutoff: inner.config.cycleCutoffSec, spend: inner.config.spendBeforeClimb, claim: inner.config.pieceSpread },
+        pins: { cutoff: inner.config.cycleCutoffSec, spend: inner.config.spendBeforeClimb, claim: inner.config.pieceSpread, press: inner.config.autoDefend ? inner.config.pressTakePerSec : 0, auto: inner.config.autoCrowdSec },
       };
     },
     configure(patch) {

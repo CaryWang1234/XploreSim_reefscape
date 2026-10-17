@@ -8,7 +8,7 @@
 //   - EVERY CONSTANT IS EITHER A CLAUSE OR AN ESTIMATE. Rules come from rules.js; anything else is
 //     labelled `[estimate]` where it is defined, and Stage 3 calibrates those against real 2025 MATCHes.
 
-import { TIME, POINTS, PIECES, FOULS, GEO, FIELD, ROBOT_LIMITS } from './rules.js';
+import { TIME, POINTS, PIECES, FOULS, GEO, FIELD, ROBOT_LIMITS, NET_LANES, NET_CAPACITY } from './rules.js';
 import { layout, emptyReef, coralMarks, reefAlgae, defaultScenario, BRANCH_SLOTS_PER_LEVEL, reefGeometry, CAGE_ROBOT_CAPACITY, HUMAN_PLAYER, CHASSIS, scaleProfile } from './model.js';
 
 export const INTENT = {
@@ -83,11 +83,14 @@ const FACE_TOL_DEG = 45;
 // floor sits at the p90 so "a hard hit" means a hit in the tail rather than every bump, and the chance that a
 // tail hit breaks something ramps from there; the tip floor is the p99 and "unable to drive" is beyond it.
 // No real-world anchor for the probability itself, which is what makes the family a scenario switch
-// (`contactFouls`) with an off value. As shipped it hands out 0.33 §7.4.4 fouls a MATCH when one ALLIANCE
-// defends and none at all between two fleets that never meet.
+// (`contactFouls`) with an off value. `[estimate]` the ceiling is 0.04, and it is set low on purpose: a break
+// is what takes a machine off the FIELD (the victim at 0 speed for 20 s, the rammer on a RED that ends its
+// MATCH), and `npm run contact` reads 0.15 as 0.38 §7.4.4 calls a MATCH against a pressed fleet with 0.29 at
+// 0.04 and 0.17 at 0.02. The press's take goes with it (7.25 → 5.79 off the opponent on the 21000 base), which
+// is the honest price of not breaking things — the machine it was pressing is still driving.
 const CONTACT_HIT_SEVERITY = 100;
 const CONTACT_IMPAIR_RAMP = 500;
-const CONTACT_MAX_IMPAIR_P = 0.15;
+const CONTACT_MAX_IMPAIR_P = 0.04;
 // G424 is the deliberate one: "A ROBOT may not deliberately, attach to, tip, or entangle with an opponent
 // ROBOT." Pressing an opponent is not tipping it, so a tip needs the deliberate hit to also be in the
 // extreme tail of the measured distribution — p99 of the defender sample.
@@ -113,6 +116,13 @@ const CONTACT_ENGAGEMENT_SEC = 1;
 // is paying 6 points every cooldown for the privilege, which is exactly the calculation a 2025 drive team
 // made at their driver meet.
 const DEFEND_STANDOFF_IN = 8;
+// A press in this engine takes tempo away through CONTACT, and that is modelled as measured rather than as
+// wished. A work-time penalty on the pressed machine (0.45 on the pick and the placement) moved its column by
+// nothing — 30.9 → 31.4 CORAL placed over 16 seeds with §7.4.4 switched off — because a fleet with slack in its
+// clock absorbs a slower pick. Denying the SOURCE outright cost 0.6 CORAL a MATCH with three machines parked on
+// it, and denying the MACHINE instead of the point froze one opponent at 62% of its placements, which is a
+// stopped game rather than a defended one. `npm run measure` prices the collision, and the AI's press price is
+// read off that.
 export { CONTACT_UNABLE_SEVERITY, CONTACT_HIT_SEVERITY, CONTACT_IMPAIR_SEC };
 
 // Signed smallest difference between two bearings in degrees, in (-180, 180].
@@ -129,11 +139,53 @@ export const footprintHalf = (rb) => rb.footprintHalfIn || ROBOT_LIMITS.footprin
 // Where a ROBOT stands to lift an ALGAE into its own NET: beside the mesh and over its 12 ft border
 // (§5.4.2), not under it — G420 forbids contacting the NET, and §6.5.1 only counts a ring that is not
 // touching a ROBOT of that ALLIANCE. The stand-off is the same construction as a BRANCH: half the goal,
-// half the car, 2 in of slack. Exported so a policy bids the point the engine will drive to.
-export function netDeposit(geo, side, half) {
+// half the car, 2 in of slack. `lane` picks which 4 ft square of the 12 ft face it stands at, because at one
+// stand-off the three machines of an ALLIANCE queued bumper-to-bumper on the middle of the mesh. Exported so
+// a policy bids the point the engine will drive to.
+export function netDeposit(geo, side, half, lane = (NET_LANES - 1) / 2) {
   const net = geo[side].net;
   const outward = Math.sign(net.x - geo.midX) || 1;
-  return { x: net.x + outward * (net.w / 2 + half + 2), y: net.y };
+  return {
+    x: net.x + outward * (net.w / 2 + half + 2),
+    y: net.y + (lane - (NET_LANES - 1) / 2) * (net.d / NET_LANES),
+  };
+}
+
+// Rings per lane still to give, or all zeros once the mesh is full. A lane the ROBOT prefers is only a
+// preference: when its own patch is packed the deposit moves to the nearest one that is not, which is what
+// keeps a 9-ring NET from being a three-ring NET with two idle stand-offs.
+function netLaneRoom(net, perLane) {
+  return net.lanes.map((n) => Math.max(0, perLane - n));
+}
+
+export const netCapacityOf = (scenario) => scenario.netCapacity ?? NET_CAPACITY;
+export const netLaneCapacity = (scenario) => Math.ceil(netCapacityOf(scenario) / NET_LANES);
+
+// Which patch of mesh this machine should use, or null when the whole face is full.
+export function netLaneFor(st, side, prefer, y) {
+  const per = netLaneCapacity(st.scenario);
+  const room = netLaneRoom(st.net[side], per);
+  if (room[prefer] > 0) return prefer;
+  const net = st.geo[side].net;
+  let best = null;
+  for (let i = 0; i < NET_LANES; i++) {
+    if (!room[i]) continue;
+    const dy = Math.abs(net.y + (i - (NET_LANES - 1) / 2) * (net.d / NET_LANES) - y);
+    if (best === null || dy < best.dy) best = { i, dy };
+  }
+  return best ? best.i : null;
+}
+
+// The stand-off this ROBOT will actually be driven to, or null when it cannot lift (no elevator) or its NET
+// is full. Shared by the move and the observation so the two can never disagree about where the point is.
+// The lane is still what the ring is billed against with `netLaneSpread: false` — that ablation moves the
+// stand-off back to the middle of the face, which is the pre-#117 behaviour, not the bookkeeping.
+export function netDepositFor(st, rb) {
+  if (!rb.profile.netScoreSec) return null;
+  const lane = netLaneFor(st, rb.side, rb.slot % NET_LANES, rb.y);
+  if (lane === null) return null;
+  const at = st.scenario.netLaneSpread === false ? (NET_LANES - 1) / 2 : lane;
+  return { ...netDeposit(st.geo, rb.side, footprintHalf(rb), at), lane };
 }
 
 // Projected half-width of a square of half-width h onto a world axis: the two edge directions each
@@ -168,14 +220,14 @@ export function squareContact(a, b) {
 }
 
 // The REEF is a regular hexagon (§5.3: 65 in across flats), not a circle. Its support along any axis is
-// the farthest of its six vertices, and the vertices sit at apothem / cos 30° on 0°, 60°, ... — the same
-// layout `branchSlots` puts its faces on, so a ROBOT that cuts the corner of a reef hits structure where
-// the real one does.
+// the farthest of its six vertices, and the vertices sit at apothem / cos 30° on 30°, 90°, ... — i.e. a
+// FLAT faces the ALLIANCE WALL (Figure 5-4) — the same layout `branchSlots` puts its faces on, so a ROBOT
+// that cuts the corner of a reef hits structure where the real one does.
 function hexSupport(apothem, ux, uy) {
   const rv = apothem / Math.cos(Math.PI / 6);
   let m = -Infinity;
   for (let k = 0; k < 6; k++) {
-    const a = (Math.PI / 3) * k;
+    const a = (Math.PI / 3) * k + Math.PI / 6;
     m = Math.max(m, ux * Math.cos(a) + uy * Math.sin(a));
   }
   return rv * m;
@@ -183,11 +235,11 @@ function hexSupport(apothem, ux, uy) {
 
 // How deep a ROBOT's oriented square sits inside one REEF's hexagon, along the shallowest axis that
 // still overlaps, or 0 when they are clear. Both bodies are centrally symmetric, so the three REEF face
-// normals (30°, 90°, 150°) and the two ROBOT axes are the whole test.
+// normals (0°, 60°, 120°) and the two ROBOT axes are the whole test.
 export function reefPenetration(reef, rb) {
   const dx = rb.x - reef.x;
   const dy = rb.y - reef.y;
-  const axes = [30, 90, 150, rb.heading, rb.heading + 90];
+  const axes = [0, 60, 120, rb.heading, rb.heading + 90];
   let best = null;
   for (const deg of axes) {
     const ux = Math.cos(deg * DEG);
@@ -211,6 +263,125 @@ function reefResolve(st, rb) {
     rb.x += hit.ux * hit.pen;
     rb.y += hit.uy * hit.pen;
   }
+}
+
+// How much room a ROBOT leaves itself when it is steered around a REEF, in inches beyond the hexagon's corner
+// plus the car's own half. `[estimate]` — the manual has nothing to say about a berth. Swept by
+// `npm run measure` at 2, 4, 8 and 14 in: at the gate below all four read the same pinned-and-blocked share, so
+// the width is not what the cure turns on, and 8 in is kept as the middle of that range — wide enough that the
+// hexagon's corner and the car's own footprint both clear the tangent line the machine is asked to follow.
+const REEF_PASS_CLEAR_IN = 8;
+
+// How long a machine has to be pressing before the swing is worth its distance, and how little it has to have
+// closed in that time to count as pressing. Both `[estimate]` and both swept by `npm run measure`: diverting
+// every trip a hexagon stands in (0 s) cures the stuck machines and takes a couple of CORAL an ALLIANCE off the
+// named presets' ledger column, because a fleet working its own REEF has structure on the line almost always;
+// 0.6 s reads the same cure and leaves that column where the record has it. 1.5 in over that window is under
+// 2.5 in/s of closing, which is a machine against the structure rather than one driving to it.
+const REEF_PRESS_SEC = 0.6;
+const REEF_PRESS_IN = 1.5;
+
+// Which REEF, if any, is between this ROBOT and the point it is driving to, tested against the same hexagon
+// `reefResolve` collides with. Only the part of the line that can reach the structure is sampled: the hexagon
+// plus a car's footprint fits inside a disc, so the chord the line cuts through that disc is the whole search
+// interval — usually a couple of samples, and none at all on the clear majority of trips. The waypoint itself
+// is never a candidate: a BRANCH stand-off sits outside the structure on purpose, and treating the machine's
+// own target as the obstacle is how it would never arrive.
+export function reefBetween(st, rb, tgt) {
+  const vx = tgt.x - rb.x;
+  const vy = tgt.y - rb.y;
+  const len = Math.hypot(vx, vy);
+  if (len < 1) return null;
+  const ux = vx / len;
+  const uy = vy / len;
+  const nx = -uy;
+  const ny = ux;
+  const half = footprintHalf(rb);
+  const probe = { x: 0, y: 0, heading: rb.heading, footprintHalfIn: half };
+  for (const side of ['blue', 'red']) {
+    const reef = st.geo[side].reef;
+    const r = reef.apothem / Math.cos(Math.PI / 6) + half * 1.5;
+    const wx = reef.x - rb.x;
+    const wy = reef.y - rb.y;
+    const lat = wx * nx + wy * ny;
+    if (Math.abs(lat) >= r) continue;
+    const along = wx * ux + wy * uy;
+    const chord = Math.sqrt(r * r - lat * lat);
+    const t0 = Math.max(0, along - chord);
+    const t1 = Math.min(len, along + chord);
+    if (t1 <= t0) continue;
+    const steps = Math.max(2, Math.ceil((t1 - t0) / 10));
+    for (let i = 0; i <= steps; i++) {
+      const f = (t0 + (t1 - t0) * (i / steps)) / len;
+      if (f > 0.98) break;
+      probe.x = rb.x + vx * f;
+      probe.y = rb.y + vy * f;
+      if (reefPenetration(reef, probe)) return reef;
+    }
+  }
+  return null;
+}
+
+// Steer around the hexagon instead of into it. A driver does not park against a REEF face and wait for the
+// waypoint to move: it slides along the structure to the next face. This takes the straight line to the
+// waypoint, finds where the REEF centre sits along it, and asks to be driven to that abeam point pushed off
+// the line, past the structure on the side it is not on. Recomputed every tick, so the waypoint walks around
+// the hexagon with the ROBOT and the direct line is taken again the moment it clears. Deterministic, and it
+// only ever changes a heading, never a decision.
+export function reefDetour(st, rb, tgt) {
+  const reef = reefBetween(st, rb, tgt);
+  if (!reef) return tgt;
+  const vx = tgt.x - rb.x;
+  const vy = tgt.y - rb.y;
+  const len = Math.hypot(vx, vy);
+  if (len < 40) return tgt; // a shuffle to the next branch is not a trip worth swinging 70 in around
+  const ux = vx / len;
+  const uy = vy / len;
+  const nx = -uy;
+  const ny = ux; // the left of the travel direction
+  const wx = reef.x - rb.x;
+  const wy = reef.y - rb.y;
+  const along = wx * ux + wy * uy;
+  const sideLat = wx * nx + wy * ny; // where the REEF sits relative to the line, + is left
+  const r = reef.apothem / Math.cos(Math.PI / 6) + footprintHalf(rb) + (st.scenario.detourClearIn ?? REEF_PASS_CLEAR_IN);
+  // Aim at the abeam point pushed to the side the REEF is NOT on, far enough that the hexagon and the car's
+  // own footprint both clear. Recomputed each tick, so this walks the ROBOT along the structure's face.
+  const s = sideLat >= 0 ? -1 : 1;
+  const push = r - Math.abs(sideLat);
+  const half = footprintHalf(rb);
+  return {
+    x: clamp(rb.x + ux * along + nx * s * push, half, FIELD.longIn - half),
+    y: clamp(rb.y + uy * along + ny * s * push, half, FIELD.wideIn - half),
+  };
+}
+
+// When to go around. A hexagon between the machine and its waypoint is not by itself a reason to swing 60 in
+// wide: most of those trips the car resolves by pressing the near face and sliding off it under `reefResolve`,
+// and diverting all of them costs the fleet two CORAL an ALLIANCE (`npm run measure` reads it on the named
+// presets at every berth width, because the price is the engagement, not the width). The swing is for the
+// machine that pressed and stayed pressed — the same REEF_PRESS_SEC of not closing on the same waypoint the
+// pile-up escape tests for, only shorter, so it goes around before it ever reaches the 3 s the stall test
+// counts. `detourPressSec: 0` is the ungated arm, and the sweep is what picked 0.6.
+function reefPress(st, rb, tgt, dist) {
+  const pressSec = st.scenario.detourPressSec ?? REEF_PRESS_SEC;
+  const blocked = !!tgt && dist > 22 && reefBetween(st, rb, tgt);
+  if (pressSec <= 0) return blocked;
+  if (blocked) {
+    if (rb.pressSince === null) {
+      rb.pressSince = st.t;
+      rb.pressFrom = dist;
+    } else if (st.t - rb.pressSince >= pressSec) {
+      if (rb.pressFrom - dist < REEF_PRESS_IN) rb.press = true;
+      else {
+        rb.pressSince = st.t;
+        rb.pressFrom = dist;
+      }
+    }
+  } else {
+    rb.pressSince = null;
+    rb.press = false;
+  }
+  return rb.press;
 }
 
 // The same DESIGN is not the same MACHINE. One MATCH, one tempo factor per ROBOT: everything that takes
@@ -258,10 +429,14 @@ export function makeAlliance(profiles, side, geo) {
       acrossSince: null, // when its whole footprint cleared the BARGE ZONE band on the opponent's side
       stallSince: null, // the pile-up test in stepRobot: when this leg started and how far the waypoint was
       stallFrom: 0,
+      pressSince: null, // #124's shorter version of the same test, run only while a REEF is on the line
+      pressFrom: 0,
+      press: false, // latched once the machine is found to be pressing against the structure: go around
       unstickUntil: 0,
       stats: {
         placed: { L1: 0, L2: 0, L3: 0, L4: 0 },
         dropped: 0,
+        carryDropped: 0, // shaken loose by the drive itself, not by a missed placement
         dropsAt: { L1: 0, L2: 0, L3: 0, L4: 0 }, // per level, because giving up on L4 is a different call from giving up on the trough
         processor: 0,
         netScored: 0,
@@ -312,11 +487,7 @@ function makeState({ blueProfiles, redProfiles, scenario: raw }) {
   // and the other 9 belong to the opponent.
   const algaeReef = { blue: [], red: [] };
   for (const side of ['blue', 'red']) {
-    const pos = reefAlgae(geo, side);
-    for (let i = 0; i < pos.length; i++) {
-      algaeReef[side].push({ x: pos[i].x, y: pos[i].y, taken: false, where: 'reef' });
-      algaeReef[side].push({ x: pos[i].x + 6, y: pos[i].y, taken: false, where: 'reef' });
-    }
+    for (const p of reefAlgae(geo, side)) algaeReef[side].push({ x: p.x, y: p.y, taken: false, where: 'reef' });
     for (const m of coralMarks(geo, side)) algaeReef[side].push({ x: m.x, y: m.y, taken: false, where: 'mark' });
   }
   const stations = { blue: [], red: [] };
@@ -356,7 +527,7 @@ function makeState({ blueProfiles, redProfiles, scenario: raw }) {
     algaeReef,
     stations,
     processor: { blue: { auto: 0, tele: 0 }, red: { auto: 0, tele: 0 } },
-    net: { blue: { count: 0, readyAt: 0, byRobot: 0 }, red: { count: 0, readyAt: 0, byRobot: 0 } },
+    net: { blue: { count: 0, readyAt: 0, byRobot: 0, lanes: new Array(NET_LANES).fill(0) }, red: { count: 0, readyAt: 0, byRobot: 0, lanes: new Array(NET_LANES).fill(0) } },
     // §5.5 + §6.1: ALGAE that goes through a PROCESSOR lands in the OPPONENT's PROCESSOR AREA, and that
     // is what that side's HUMAN PLAYER throws into its own NET. So hpQueue[blue] is blue's HP's supply,
     // fed by red's robots. hpOverflow counts what arrived while the area was already at the G435 limit.
@@ -466,8 +637,20 @@ function stepRobot(st, rb, dt) {
   const im = rb.impair ? rb.impair.speed : 1;
   const ch = CHASSIS[p.chassis] || CHASSIS.swerve;
   const target = rb.busy ? rb.busy.at : rb.target;
-  const dx = target ? target.x - rb.x : 0;
-  const dy = target ? target.y - rb.y : 0;
+  // A ROBOT that is working, or holding a face, is already at its element and moving a few inches; sending it
+  // around the REEF at that moment would be steering it away from the thing it is doing. Long trips only, and
+  // only while it is not facing anything: the detour is a routing change, not a new decision.
+  const rawDist = target ? Math.hypot(target.x - rb.x, target.y - rb.y) : 0;
+  // The press clock is a property of ONE drive leg. A machine that reached an element and worked it has not
+  // been pressing against the REEF, and one that has just been shoved off a face has: without this the latch
+  // of the leg before the placement would hand the next trip its swing on the first blocked tick, and the
+  // 0.6 s gate would only be a gate on the first trip of the MATCH.
+  if (!target || rb.busy || rb.faceDeg !== null || st.scenario.detourOff) { rb.pressSince = null; rb.press = false; }
+  const around = !!target && !rb.busy && rb.faceDeg === null && !st.scenario.detourOff && reefPress(st, rb, target, rawDist);
+  rb.press = around; // the frames report the trips this engine actually routed around, ungated arm included
+  const aim = around ? reefDetour(st, rb, target) : target;
+  const dx = aim ? aim.x - rb.x : 0;
+  const dy = aim ? aim.y - rb.y : 0;
   const dist = Math.hypot(dx, dy);
   // Closed loop: a drivetrain brakes into its waypoint instead of arriving at full speed and ringing
   // around it. sqrt(2 a d) is the exact stopping distance for the profile's acceleration.
@@ -526,6 +709,8 @@ function stepRobot(st, rb, dt) {
     if (fwd < 0) fwd *= ch.reverse;
   }
   const maxDelta = p.accelIpsS * im * dt;
+  const vx0 = rb.vx;
+  const vy0 = rb.vy;
   rb.vx += clamp(fwd * cosH - lat * sinH - rb.vx, -maxDelta, maxDelta);
   rb.vy += clamp(fwd * sinH + lat * cosH - rb.vy, -maxDelta, maxDelta);
   rb.x += rb.vx * dt;
@@ -538,6 +723,22 @@ function stepRobot(st, rb, dt) {
     rb.x = clamp(rb.x, half, FIELD.longIn - half);
     rb.y = clamp(rb.y, half, FIELD.wideIn - half);
     reefResolve(st, rb);
+  }
+
+  // A CORAL held against a REEF branch, or out on a field where the driver is standing on the throttle, comes
+  // loose. The trigger is the acceleration the drivetrain actually got this tick, not the speed it is carrying:
+  // a machine pinned against the separation solver accelerates hard and moves nowhere, and that is exactly the
+  // shudder that shakes a piece out. `carryDrop` is the per-second rate at full throttle, `[estimate]` because
+  // §6.5 charges a CORAL that falls without ever saying how it came to fall, and 0 spends no random number at
+  // all, which is what makes the off value a control rather than a different roll order.
+  if (rb.coral > 0 && !rb.busy && st.scenario.carryDrop > 0) {
+    const throttle = Math.hypot(rb.vx - vx0, rb.vy - vy0) / Math.max(maxDelta, 1e-9);
+    if (throttle > 0.85 && st.rng() < st.scenario.carryDrop * dt) {
+      rb.coral -= 1;
+      rb.stats.carryDropped += 1;
+      dropHere(st, rb, 'coral');
+      st.events.push({ t: st.t, kind: 'carry-drop', side: rb.side, slot: rb.slot, x: Math.round(rb.x), y: Math.round(rb.y) });
+    }
   }
 
   // `[estimate]` A CORAL STATION sits in the corner where the ALLIANCE WALL meets the guardrail, three ROBOTS
@@ -569,9 +770,11 @@ function stepRobot(st, rb, dt) {
   }
 
   // §6.5.2: LEAVE is its BUMPERS no longer overlapping the line, so the whole 30 in footprint has to be
-  // across it, not the centre.
+  // clear of it — and the clause names no direction, so backing off toward the ALLIANCE WALL counts the
+  // same as driving out toward the BARGE. G303-D starts the ROBOT straddling the line, which is what makes
+  // this a test of the footprint rather than of a crossing.
   const line = st.geo[rb.side].startingLineX;
-  const crossed = rb.side === 'blue' ? rb.x - half > line : rb.x + half < line;
+  const crossed = Math.abs(rb.x - line) > half;
   if (crossed && !rb.left) {
     rb.left = true;
     st.events.push({ t: st.t, kind: 'leave', side: rb.side, slot: rb.slot });
@@ -741,6 +944,30 @@ function placeMissP(rb, b) {
   return Math.min(0.95, base * (0.25 + 2.75 * e * e));
 }
 
+// A grab is only worked while the ROBOT is beside the piece. Two things used to make a take happen at a
+// distance: the timer started at the DECISION (fixed by the same reach test the engine already applies to the
+// sources it picks for itself), and once started it kept counting while the machine drove PAST the piece — a
+// 150 in/s car with a 1.5 s strip does not stop on a 16 in target, so the replay showed rings changing hands
+// 42 in downwind of them. The clock therefore only advances inside one box-length (R104's 30 in plate) of the
+// piece, and a machine that cannot get back within the action's own duration gives it up and re-decides. A
+// version that cancelled the moment the car drifted out cost 17% of all strip attempts and 9 points a MATCH,
+// which is a penalty the driver who overshoots by a foot and a half does not pay.
+const GRAB_BREAK_IN = 30;
+
+// Returns true when the tick was consumed by the action (worked or held), so the caller skips the timer.
+function stepGrab(st, rb) {
+  const b = rb.busy;
+  const isGrab = (b.kind === INTENT.FETCH_CORAL || b.kind === INTENT.STRIP_ALGAE) && b.piece;
+  if (isGrab && b.at && hypot(rb.x, rb.y, b.at.x, b.at.y) > GRAB_BREAK_IN) {
+    b.held = (b.held || 0) + TICK;
+    if (b.held > b.sec) { rb.busy = null; rb.faceDeg = null; }
+    return true;
+  }
+  b.t += TICK;
+  if (b.t >= b.sec) finishBusy(st, rb);
+  return true;
+}
+
 function finishBusy(st, rb) {
   const b = rb.busy;
   if (!b) return;
@@ -834,15 +1061,30 @@ function finishBusy(st, rb) {
       st.events.push({ t: st.t, kind: 'processor', side: rb.side, slot: rb.slot });
     }
   } else if (b.kind === INTENT.SCORE_NET) {
-    if (rb.algae > 0) {
+    const net = st.net[rb.side];
+    // The ceiling is the MESH's, not the patch's. `netDepositFor` refuses a LIFT when the three lanes are full,
+    // but a machine that committed while there was room and arrived after the last ring went in has nowhere to
+    // put this one: §6.5.1 counts a ring only above and inside the perimeter, so it stays in the hopper and the
+    // ALLIANCE processes it. Billing it regardless is what let a nine-ring mesh read eleven in a score while
+    // the drawn lanes stopped at nine.
+    if (rb.algae > 0 && net.count < netCapacityOf(st.scenario)) {
       rb.algae -= 1;
-      const net = st.net[rb.side];
       net.count += 1;
       net.byRobot += 1;
+      // The lane was chosen when the lift started, and two machines can pick the same patch in the same
+      // window. A ring that arrives at a patch which filled underneath it is billed to the patch that still
+      // has room, because that is where it hangs: keeping `lanes` the same book as `count` is what lets the
+      // replay draw every ring the score counts rather than one fewer.
+      const aimed = b.at && b.at.lane != null ? b.at.lane : 0;
+      const lane = netLaneFor(st, rb.side, aimed, rb.y) ?? aimed;
+      net.lanes[lane] += 1;
       rb.stats.netScored += 1;
       // §6.5.1 needs the ring above the mesh, inside its perimeter, and not touching a ROBOT of that
       // ALLIANCE, so the release is the end of the action: the piece is not on the field to be re-taken.
-      st.events.push({ t: st.t, kind: 'net', side: rb.side, slot: rb.slot, by: 'robot' });
+      // `lane` is which patch of mesh holds the ring; `standoffY` is the point the machine was driven to, and
+      // the two are not the same book — `netLaneSpread: false` moves the second back to the middle of the face
+      // and leaves the first alone.
+      st.events.push({ t: st.t, kind: 'net', side: rb.side, slot: rb.slot, by: 'robot', lane, standoffY: b.at && b.at.y != null ? b.at.y : st.geo[rb.side].net.y });
     }
   } else if (b.kind === INTENT.CLIMB) {
     rb.climb = { level: b.deep ? 'deep' : 'shallow', cage: b.cage, at: st.t };
@@ -869,10 +1111,16 @@ function stepHumanPlayer(st, side) {
   if (st.t < TIME.autoSec) return; // G404: no ALGAE enters the field during AUTO
   if (net.readyAt > st.t) return;
   if (st.hpQueue[side] <= 0) return;
+  // A mesh already holding its rings has nowhere for another one to land, so the HUMAN PLAYER stops throwing
+  // rather than spending a slot on a piece that cannot count (§6.5.1 needs it above and inside the perimeter).
+  if (net.count >= netCapacityOf(st.scenario)) return;
   net.readyAt = st.t + hp.throwSec; // the attempt costs the slot whether it goes in or not
   if (st.rng() < hp.accuracy) {
     st.hpQueue[side] -= 1;
     net.count += 1;
+    let lane = net.lanes.findIndex((n) => n < netLaneCapacity(st.scenario));
+    if (lane < 0) lane = NET_LANES - 1; // the machines filled a patch first: bill `count`, which is the gate
+    net.lanes[lane] += 1;
     st.events.push({ t: st.t, kind: 'net', side, by: 'hp' });
   } else {
     st.events.push({ t: st.t, kind: 'netMiss', side });
@@ -1018,21 +1266,27 @@ function checkFouls(st, rb) {
 }
 
 // G421 1 defender at a time: "No more than 1 ROBOT may be on the opponent's side of the FIELD (i.e.
-// containing the opponent REEF) with its BUMPERS fully outside and beyond the BARGE ZONES." The two zones
-// together make the band `midX ± 46 in` (§5: the BARGE ZONE is 3 ft 10 in deep and surrounds its ALLIANCE'S
-// half of the BARGE), so the violation is a whole footprint — not just a centre — clear of that band on the
-// wrong side of the centreline, measured on the bumper edge the clause names. The clause limits the ALLIANCE
-// to one, so which of two machines across counts as "the defender" is decided by who got there first; the
-// second one and any after it are the violation. Severity follows the clause: one MINOR, then a MAJOR for
-// every 3 s the situation is not corrected (`escalates`).
+// containing the opponent REEF) with its BUMPERS fully outside and beyond the BARGE ZONES." Two conditions, so
+// two tests: the centreline decides the side, and the clause's exemption is the two BARGE ZONE rectangles —
+// each 3 ft 10 in deep by 12 ft 2½ in long (§5 definitions), which is 293 in of the 317 in field width. A
+// machine in the y-gap between them is on the opponent's side and outside both zones, and the earlier version
+// of this test exempted the whole `midX ± 46 in` band, which is 97 robot-frames of 18,000 too lenient against
+// the 41 it did count. Severity follows the clause: one MINOR, then a MAJOR for every 3 s the situation is not
+// corrected (`escalates`). The clause limits the ALLIANCE to one, so which of two machines across counts as
+// "the defender" is decided by who got there first; the second one and any after it are the violation.
 function checkDefenders(st) {
   for (const side of ['blue', 'red']) {
     const toward = side === 'blue' ? 1 : -1;
-    const band = st.geo.midX + toward * GEO.barge.zoneDepthIn;
+    const opp = side === 'blue' ? 'red' : 'blue';
+    const zones = [st.geo[side].bargeZone, st.geo[opp].bargeZone];
     const robots = st.robots[side];
     for (const rb of robots) {
-      const reach = projectHalf(footprintHalf(rb), rb.heading, 1, 0);
-      const beyond = rb.disabled || rb.climb ? false : toward > 0 ? rb.x - reach > band : rb.x + reach < band;
+      const half = footprintHalf(rb);
+      const reachX = projectHalf(half, rb.heading, 1, 0);
+      const reachY = projectHalf(half, rb.heading, 0, 1);
+      const onTheirSide = toward > 0 ? rb.x > st.geo.midX : rb.x < st.geo.midX;
+      const clearOf = (z) => Math.abs(rb.x - z.x) > z.halfX + reachX || Math.abs(rb.y - z.y) > z.halfY + reachY;
+      const beyond = rb.disabled || rb.climb ? false : onTheirSide && zones.every(clearOf);
       if (!beyond) {
         rb.acrossSince = null;
         // Leaving the wrong side corrects the situation, so the next excursion starts a fresh MINOR.
@@ -1086,7 +1340,7 @@ export function makeObs(st, rb) {
   // taking a CORAL out of their queue denies it as surely as scoring it. The price is the crossing, and on
   // that half of the FIELD the machine is the one G421 counts and G427 protects the other side's pieces in.
   const enemyStations = st.stations[opp].map((q, i) => ({ i, x: q.x, y: q.y, remaining: q.remaining, d: hypot(rb.x, rb.y, q.x, q.y) }));
-  const netPos = rb.profile.netScoreSec ? netDeposit(st.geo, side, footprintHalf(rb)) : null;
+  const netPos = netDepositFor(st, rb);
   return {
     t: st.t,
     period: periodAt(st.t),
@@ -1110,9 +1364,12 @@ export function makeObs(st, rb) {
     processor: st.geo[side].processor,
     processorCount: st.processor[side].auto + st.processor[side].tele,
     net: st.net[side].count,
+    netCapacity: netCapacityOf(st.scenario),
     netByRobot: st.net[side].byRobot,
     // Where this ROBOT would stand to lift an ALGAE into its own NET, or null when its elevator cannot
-    // clear the mesh's border (`netScoreSec` 0). Priced, not assumed: §6.1 gives the NET to the ROBOT too.
+    // clear the mesh's border (`netScoreSec` 0) or when the mesh is already holding its rings. The lane
+    // inside it is the patch of the 12 ft face this machine owns, so the fleet does not queue on one point.
+    // Priced, not assumed: §6.1 gives the NET to the ROBOT too.
     netDeposit: netPos ? { x: netPos.x, y: netPos.y, d: hypot(rb.x, rb.y, netPos.x, netPos.y), sec: rb.profile.netScoreSec } : null,
     hpQueue: st.hpQueue[side],
     hpStorage: st.scenario.humanPlayer[side].storage, // G435: the area is full, so more ALGAE has nowhere to go
@@ -1122,7 +1379,7 @@ export function makeObs(st, rb) {
     // machine can do better is what the strip is worth — a policy that prices algae at 6 over-fishes them.
     algaeMarginValue: Math.max(
       POINTS.algae.processor[1] - POINTS.algae.net[1] * st.scenario.humanPlayer[opp].accuracy,
-      rb.profile.netScoreSec ? POINTS.algae.net[1] : 0,
+      netPos ? POINTS.algae.net[1] : 0,
     ),
     // The raw figure the planner needs to price an ALGAE the same way `fastsim.js` does. `algaeMarginValue`
     // is the net number a policy bids with; recovering the accuracy from it would tie the planner to one
@@ -1194,7 +1451,7 @@ function scoreSide(st, side) {
     total: coralPoints + algaePoints + leave + bargePoints,
     rp: { auto: autoRp ? POINTS.rp.auto : 0, coral: coralRp ? POINTS.rp.coral : 0, barge: bargeRp ? POINTS.rp.barge : 0, win: 0, tie: 0 },
     autoCoral,
-    robots: robots.map((r) => ({ slot: r.slot, team: r.team, name: r.name, tempo: +(r.profile.tempoFactor ?? 1).toFixed(2), placed: r.stats.placed, dropped: r.stats.dropped, processor: r.stats.processor, netScored: r.stats.netScored, picked: r.stats.picked, strips: r.stats.strips, defend: +r.stats.defendSec.toFixed(1), blocked: +r.stats.blockSec.toFixed(1), yellow: r.yellow, climb: r.climb ? r.climb.level : null, climbCage: r.climb ? r.climb.cage : null, left: r.left, disabled: r.disabled, fouls: r.stats.fouls, x: r.x, y: r.y })),
+    robots: robots.map((r) => ({ slot: r.slot, team: r.team, name: r.name, tempo: +(r.profile.tempoFactor ?? 1).toFixed(2), placed: r.stats.placed, dropped: r.stats.dropped, carryDropped: r.stats.carryDropped, processor: r.stats.processor, netScored: r.stats.netScored, picked: r.stats.picked, strips: r.stats.strips, defend: +r.stats.defendSec.toFixed(1), blocked: +r.stats.blockSec.toFixed(1), yellow: r.yellow, climb: r.climb ? r.climb.level : null, climbCage: r.climb ? r.climb.cage : null, left: r.left, disabled: r.disabled, fouls: r.stats.fouls, x: r.x, y: r.y })),
   };
 }
 
@@ -1232,8 +1489,7 @@ export function simulateMatch({ blueProfiles, redProfiles, bluePolicy, redPolicy
       for (const rb of st.robots[side]) {
         const pol = side === 'blue' ? bluePolicy : redPolicy;
         if (rb.busy) {
-          rb.busy.t += TICK;
-          if (rb.busy.t >= rb.busy.sec) finishBusy(st, rb);
+          stepGrab(st, rb);
           continue;
         }
         if (rb.climb || !decideOn) continue;
@@ -1265,10 +1521,7 @@ export function simulateMatch({ blueProfiles, redProfiles, bluePolicy, redPolicy
     st.t = +(TIME.matchSec + g * TICK).toFixed(2);
     for (const side of ['blue', 'red']) {
       for (const rb of st.robots[side]) {
-        if (rb.busy) {
-          rb.busy.t += TICK;
-          if (rb.busy.t >= rb.busy.sec) finishBusy(st, rb);
-        }
+        if (rb.busy) stepGrab(st, rb);
         stepRobot(st, rb, TICK);
       }
     }
@@ -1374,6 +1627,12 @@ function applyIntent(st, rb, want, obs) {
       return;
     }
     rb.target = { x: pick.x, y: pick.y };
+    // A piece is taken where it lies, not where the ROBOT happens to be standing when it decides. The two
+    // sources the engine picks for itself already test this (`stationPick` hands back `travelOnly` past 20 in,
+    // `nearestCoral` past 22) and the path a POLICY names did not, because that branch trusts the caller and
+    // hands the pick straight to `finishBusy`. Measured over 8 MATCHes before the line: 840 picks, the median
+    // one 9 in from the source, but 7% of them more than 24 in and the worst 145 in.
+    if (hypot(rb.x, rb.y, pick.x, pick.y) > 22) return;
     // Count the pick against the corner it is bound for, and whether a teammate was already heading there.
     // This is the crowding the spread rule trades against, and the planner cannot see it any other way.
     const c = st.contest[rb.side];
@@ -1399,6 +1658,13 @@ function applyIntent(st, rb, want, obs) {
       return;
     }
     rb.target = { x: a.x, y: a.y };
+    // The ring is taken from the face it rides on. §6.3.4.2 A stages each ALGAE on a pair of BRANCHES, which are
+    // 6 in out from a 5 ft 5 in hexagon `reefResolve` refuses to let anything enter, so the closest legal position
+    // for a machine is its own half-footprint off that flat — about 9 in from the ring. 16 in is INTENT.PLACE's
+    // stand-off for a BRANCH, and the same test applied to the CORAL above: before it, 168 strips over 8 MATCHes
+    // completed at a median 48 in from the ring and a worst 173 in, which is a machine on one side of the REEF
+    // taking an ALGAE off the other.
+    if (hypot(rb.x, rb.y, a.x, a.y) > 16) return;
     if (st.algaeReef[rb.side === 'blue' ? 'red' : 'blue'].includes(a.ref)) st.deny[rb.side].theirAlgae += 1;
     rb.busy = { kind: mode, t: 0, sec: p.algaeStripSec, at: { x: a.x, y: a.y }, piece: a.ref };
     return;
@@ -1486,12 +1752,15 @@ function applyIntent(st, rb, want, obs) {
     const sec = rb.profile.netScoreSec || 0;
     if (!sec) return;
     const net = st.geo[rb.side].net;
-    const pos = netDeposit(st.geo, rb.side, footprintHalf(rb));
+    const pos = netDepositFor(st, rb);
+    if (!pos) return; // no elevator, or the mesh is already full
     if (hypot(rb.x, rb.y, pos.x, pos.y) > 20) {
       rb.target = pos;
       return;
     }
-    rb.faceDeg = bearingDeg(net.x - rb.x, net.y - rb.y);
+    // Aimed at the patch of mesh above the machine, not at the middle of the 12 ft face: from an end lane the
+    // centre is 48 in along the border, and pointing at it would put the bumper off-axis to the deposit.
+    rb.faceDeg = bearingDeg(net.x - rb.x, pos.y - rb.y);
     if (Math.abs(angleDeltaDeg(rb.faceDeg, rb.heading)) > FACE_TOL_DEG) return;
     rb.busy = { kind: mode, t: 0, sec, at: pos };
     return;
@@ -1588,16 +1857,48 @@ function nearestCoral(st, rb, obs) {
 }
 
 function snapshot(st) {
+  // Which BRANCHES and which ALGAE nodes are actually occupied, as a bitmask per level. The counts alone made
+  // the replay draw the first N branches in slot order, so a CORAL booked on the face at 150° appeared on the
+  // face at 30° and a ring the engine had taken from one pair showed up missing from another. The indices are
+  // `st.slots[side]` order, which is what `freeSlotNear` books and what viz.js draws from `branchSlots`.
+  const occ = (side) => {
+    const mask = (lv) => st.reef[side][lv].reduce((m, v, i) => (v ? m | (1 << i) : m), 0);
+    // Which ALGAE are still on the REEF, and which still ride the CORAL MARKS, as two bitmasks in the order
+    // `makeState` fills them (`reefAlgae` then `coralMarks`). The counts alone made the replay remove rings from
+    // the top of the list, so a machine that took the ring at one pair left a picture with a ring missing from
+    // another. viz.js draws from these two masks against the same two calls.
+    let reefM = 0;
+    let markM = 0;
+    let ri = 0;
+    let mi = 0;
+    for (const a of st.algaeReef[side]) {
+      // The bit index is the ring's position in the list, taken or not, so it lines up with `reefAlgae` and
+      // `coralMarks` on the drawing side.
+      if (a.where === 'reef') {
+        if (!a.taken) reefM |= 1 << ri;
+        ri += 1;
+      } else {
+        if (!a.taken) markM |= 1 << mi;
+        mi += 1;
+      }
+    }
+    return {
+      L2: st.reef[side].L2.filter(Boolean).length, L3: st.reef[side].L3.filter(Boolean).length,
+      L4: st.reef[side].L4.filter(Boolean).length, trough: st.reef[side].trough.count,
+      L2m: mask('L2'), L3m: mask('L3'), L4m: mask('L4'),
+      algae: st.algaeReef[side].filter((a) => !a.taken).length,
+      algaeReef: st.algaeReef[side].filter((a) => !a.taken && a.where === 'reef').length,
+      algaeMarks: st.algaeReef[side].filter((a) => !a.taken && a.where === 'mark').length,
+      algaeReefM: reefM, algaeMarksM: markM,
+    };
+  };
   return {
     t: st.t,
     period: periodAt(st.t),
     robots: ['blue', 'red'].flatMap((side) =>
-      st.robots[side].map((r) => ({ side, slot: r.slot, x: +r.x.toFixed(1), y: +r.y.toFixed(1), heading: +(r.heading || 0).toFixed(0), coral: r.coral, algae: r.algae, busy: r.busy ? r.busy.kind : null, intent: r.intent || null, target: r.target ? [+r.target.x.toFixed(0), +r.target.y.toFixed(0)] : null, climb: r.climb ? r.climb.level : null, cage: r.climb ? r.climb.cage : null, disabled: r.disabled, defending: r.defending, impair: r.impair ? { left: +r.impair.left.toFixed(1), speed: r.impair.speed } : null })),
+      st.robots[side].map((r) => ({ side, slot: r.slot, x: +r.x.toFixed(1), y: +r.y.toFixed(1), heading: +(r.heading || 0).toFixed(0), coral: r.coral, algae: r.algae, busy: r.busy ? r.busy.kind : null, intent: r.intent || null, target: r.target ? [+r.target.x.toFixed(0), +r.target.y.toFixed(0)] : null, press: r.press ? 1 : 0, climb: r.climb ? r.climb.level : null, cage: r.climb ? r.climb.cage : null, disabled: r.disabled, defending: r.defending, impair: r.impair ? { left: +r.impair.left.toFixed(1), speed: r.impair.speed } : null })),
     ),
-    reef: {
-      blue: { L2: st.reef.blue.L2.filter(Boolean).length, L3: st.reef.blue.L3.filter(Boolean).length, L4: st.reef.blue.L4.filter(Boolean).length, trough: st.reef.blue.trough.count, algae: st.algaeReef.blue.filter((a) => !a.taken).length, algaeReef: st.algaeReef.blue.filter((a) => !a.taken && a.where === 'reef').length, algaeMarks: st.algaeReef.blue.filter((a) => !a.taken && a.where === 'mark').length },
-      red: { L2: st.reef.red.L2.filter(Boolean).length, L3: st.reef.red.L3.filter(Boolean).length, L4: st.reef.red.L4.filter(Boolean).length, trough: st.reef.red.trough.count, algae: st.algaeReef.red.filter((a) => !a.taken).length, algaeReef: st.algaeReef.red.filter((a) => !a.taken && a.where === 'reef').length, algaeMarks: st.algaeReef.red.filter((a) => !a.taken && a.where === 'mark').length },
-    },
+    reef: { blue: occ('blue'), red: occ('red') },
     floor: st.floor.filter((p) => !p.taken).map((p) => ({ x: p.x, y: p.y, kind: p.kind, side: p.side, rot: p.rot || 0 })),
     stations: { blue: st.stations.blue.map((q) => q.remaining), red: st.stations.red.map((q) => q.remaining) },
     cages: st.scenario.cageDepth,
@@ -1605,6 +1906,8 @@ function snapshot(st) {
     hpQueue: { blue: st.hpQueue.blue, red: st.hpQueue.red },
     processor: { blue: st.processor.blue.auto + st.processor.blue.tele, red: st.processor.red.auto + st.processor.red.tele },
     net: { blue: st.net.blue.count, red: st.net.red.count },
+    netLanes: { blue: st.net.blue.lanes.slice(), red: st.net.red.lanes.slice() },
+    netCap: netCapacityOf(st.scenario),
     netRobot: { blue: st.net.blue.byRobot, red: st.net.red.byRobot },
     score: { blue: scoreSide(st, 'blue').total, red: scoreSide(st, 'red').total },
   };

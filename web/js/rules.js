@@ -96,13 +96,27 @@ export const PIECES = {
   },
   algae: {
     diameterIn: [16, 16.5], // §5.7.2 inflated to between 16 in and 16.5 in
-    stagedPerMatch: 18, // §6.3.4.2: 12 on the two REEFs (6 each, in three pairs) + 1 on each mark CORAL
+    stagedPerMatch: 18, // §6.3.4.2: 12 on the two REEFs (6 each, one straddling each face's BRANCH pair) + 1 on each mark CORAL
     onReef: 12, // §6.3.4.2 A, field total: 6 per ALLIANCE
     onCoralMarks: 6, // §6.3.4.2 B, field total: 3 per ALLIANCE
   },
   // G409 "1 of each at a time": a ROBOT may not CONTROL more than 1 CORAL and 1 ALGAE simultaneously.
   carryLimit: { coral: 1, algae: 1 },
 };
+
+// ---------------------------------------------------------------------------
+// NET capacity (§5.4.2 geometry + §5.7.2 ring size; §6.5.1 sets no number)
+// ---------------------------------------------------------------------------
+// The mesh is 4 ft × 12 ft, so its long face splits into three 4 ft squares of border, and each of an
+// ALLIANCE's three ROBOTS gets one. `[estimate]` how many rings a patch holds: a ring is 16 in across
+// (§5.7.2's lower bound) and 48 in of border takes three laid end to end, so 9 an ALLIANCE. This is geometry,
+// not a clause — §6.5.1 counts a ring "contacting the NET or ALGAE contacting the NET", which makes stacking
+// legal, and the only ceiling the rules do impose is the 18 ALGAE §6.3.4.2 stages a MATCH. A full single
+// layer (floor(48/16.5) × floor(144/16.5) = 16) is the other reading, and it never binds: the busiest NET in
+// 192 measured alliances was 15.
+export const NET_LANES = Math.round(GEO.net.lengthIn / GEO.net.widthIn); // 3
+export const NET_LANE_CAPACITY = Math.floor(GEO.net.widthIn / PIECES.algae.diameterIn[0]); // 3
+export const NET_CAPACITY = NET_LANES * NET_LANE_CAPACITY; // 9
 
 // ---------------------------------------------------------------------------
 // Match clock (§6.4 MATCH Phases)

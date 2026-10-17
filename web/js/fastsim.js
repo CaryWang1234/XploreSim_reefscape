@@ -14,7 +14,7 @@
 import { travelSec } from './policy.js';
 import { netDeposit } from './engine.js';
 import { POINTS, TIME, ROBOT_LIMITS } from './rules.js';
-import { BRANCH_SLOTS_PER_LEVEL, TROUGH_CAP, ALGAE_PER_ALLIANCE, CAGE_ROBOT_CAPACITY } from './model.js';
+import { BRANCH_SLOTS_PER_LEVEL, TROUGH_CAP, ALGAE_PER_ALLIANCE, CAGE_ROBOT_CAPACITY, MARK_FROM_REEF_IN } from './model.js';
 
 // Mirrored from the engine so the two price the same action (engine.js finishBusy / the CLIMB branch).
 const PROCESS_SEC = 0.8;
@@ -29,13 +29,15 @@ const CLIMB_APPROACH_IN = 20;
 // legally take a ring from either REEF (§6.5.1 scores an ALGAE by where it lands, never by where it grew) but
 // holds back while an opponent is home to be touched, so a duty machine crosses only on the leakage past that
 // gate. Over 16 seeds on two bases, with one fleet told to strip and the other playing the shipped policy, the
-// three duty arms took 0.19 / 0.31 / 0.63 enemy rings a MATCH for one, two and three machines on duty and
-// donated 0.38 / 1.88 / 1.13 points — about a fifth of a ring per duty machine and better than three points
-// per ring carried home. The donation is G418 (contacting an opponent CAGE, the furniture a route to their
-// REEF has to pass, a MAJOR FOUL) plus G421 when a second machine is out there with it. Both were measured
-// after the trio started lifting its own ALGAE: a machine that can keep 4 in its own NET has much less reason
-// to go over there, which is why the price per ring came down from the 5.9 the processor-only fleet paid.
-const ENEMY_RINGS_PER_DUTY = 0.19;
+// duty arms took 0.19 / 0.63 enemy rings a MATCH for one and three machines on duty (two sits between them)
+// and donated 7.1 / 41.8 points against the no-duty fleet's 3.8 — about a third of a ring per duty machine.
+// The donation is G418 (contacting an opponent CAGE, the furniture a route to their REEF has to pass, a MAJOR
+// FOUL) plus G421 when a second machine is out there with it, and most of it is roaming traffic rather than
+// the trip, which is why the model charges the rings and not the bill. Both were measured after the trio
+// started lifting its own ALGAE, and again after #123 moved the CORAL MARKs behind the REEF: the leakage went
+// UP, because a machine whose own nine rings are all it can see at home has one less reason to go over there
+// and one more reason for the trip to be the ALGAE that is still on their structure.
+const ENEMY_RINGS_PER_DUTY = 0.30;
 const CROSS_FOUL_PTS = 3.0;
 // The station spread, in two measured numbers. `SPREAD_SEC` is what a CORAL STATION pocket costs when a
 // teammate is already queueing at it, and it is also roughly the break-even the bid should use — a machine
@@ -46,13 +48,15 @@ const CROSS_FOUL_PTS = 3.0;
 // 24 mirror seeds a pick that began with a teammate on the same corner now follows that machine's last pick by
 // 4.34 ± 0.18 s against 6.83 ± 0.11 s when it began alone (n=257 against 2,703) — rejoining the corner your
 // fleet never left is a short drive, so that read cannot carry a wait any more. What the lever still does is
-// organise the queue, which the engine's own counter reads: 27.0% of a fleet's picks start contested unpriced,
-// 17.7% with the crowd at 0.91 s. What that is worth in a MATCH, on the one-sided arm guard 27 runs, is
-// +1.1 ± 2.0 own points over 24 paired held-out seeds, and −3.1 ± 2.4 margin when both fleets do it. The credit
+// organise the queue, which the engine's own counter reads: 27.5% of a fleet's 58.7 CORAL picks start contested
+// unpriced, 15.1% with the crowd at 0.91 s. What that is worth in a MATCH, on the one-sided arm guard 27 runs,
+// is +3.3 ± 2.0 own points over 24 paired held-out seeds, and −2.2 ± 3.3 margin when both fleets do it. The credit
 // is set on the estimate rather than guessed at: its effect there is a STEP, because a saved second only shows
 // up when enough of them stack to fit another whole cycle before the commit window. At the efficiency
-// `npm run verify` prices with (the mean of the two fits, 1.3925) the price reads 0 points with no credit, one
-// extra CORAL (+2) for anything from 0.05 s to 0.38 s, two (+4) at 0.50 s and four (+8) at 0.70 s. 0.15 sits in
+// `npm run verify` prices with (1.3925, deliberately NOT the 1.613 `npm run fastsim` fits on both bases since #123
+// moved the MARKs — at the fit the credit stops pricing the spread as seconds off a cycle and the guard's two-
+// clock clause has nothing to assert) the price reads 0 points with no credit, one extra CORAL (+2) for anything
+// from 0.05 s to 0.38 s, two (+4) at 0.50 s and four (+8) at 0.70 s. 0.15 sits in
 // the middle of the plateau the engine's read supports.
 const SPREAD_SEC = 0.91;
 export const SPREAD_PENALTY = SPREAD_SEC;
@@ -75,7 +79,7 @@ export function makeContext({ profiles, geo, side, scenario, marks = 3 }) {
     // Cycles return to the nearer corner: greedy prices both STATIONs the same way the engine's baseline
     // does, so the model is comparing like with like rather than with an idealised fleet.
     stationD: Math.min(...geo[side].coralStations.map((s) => hypot(s, reef))),
-    markD: reef.apothem + 26, // §6.3.4.1 A: three CORAL MARKS lie around each ALLIANCE's REEF
+    markD: MARK_FROM_REEF_IN, // §6.3.4.1 A: three CORAL MARKS, in a line between the REEF and its ALLIANCE WALL
     marks,
     processorD: hypot(geo[side].processor, reef),
     bargeD: hypot(geo[side].bargeZone, reef),
@@ -125,7 +129,9 @@ export function coralCycleSec(ctx, p, level, fromMarks, eff = ctx.efficiency) {
 // DELIVERY separately (`policy.js` sorts its options by `d / value`, and `d` is the distance to the piece).
 // An ALGAE grows on the robot's own REEF, so a machine standing at a branch is a few feet from one: the ALGAE
 // wins the bid whenever one is left, and the fleet drains all nine inside the first minute while the REEF
-// still has 11 empty CORAL slots. That is why the engine's ALGAE column reads 8.8 of 9 — and why a model that
+// still has 11 empty CORAL slots. That is why the engine banks ALGAE columns bigger than the nine a side grows
+// (`npm run headroom`'s shipped row: 5.0 processed and 8.0 in the mesh, 5.2 and 7.8 on the other base) — the
+// other REEF is legal supply — and why a model that
 // bids on the processor round trip bids on nothing worth taking and scores 0.
 // `[estimate]` ALGAE_REACH_IN: the gap between neighbouring branch positions on a hexagon face.
 const ALGAE_REACH_IN = 18;
@@ -168,7 +174,7 @@ function climbSec(ctx, p, cage) {
   // climb leg is priced like the others — the hexagon's apothem off the straight line.
   // `efficiency` is deliberately NOT applied here. It is a fit for the queue three machines form at one CORAL
   // STATION corner, and the BARGE side of the field has no queue: the engine banks roughly three cages at
-  // every window from 6 s to 30 s (BARGE 28.8-30.0 across the `npm run headroom` arms), while applying the
+  // every window from 6 s to 30 s (BARGE 27.3-30.0 across the `npm run headroom` arms), while applying the
   // traffic fudge to this leg made a 6 s commit cost the model all 36 of its CAGE points and flipped the sign
   // of the biggest lever the planner is supposed to find.
   const d = Math.max(cage.d - ctx.reef.apothem - CLIMB_APPROACH_IN, 40);
@@ -196,8 +202,9 @@ function bestCage(ctx, p, used) {
 }
 
 // The AUTO routine (§6.4) is scripted, so it is a fixed contribution the planner does not drive:
-// `autoCycles` CORAL per ROBOT counting the preload (§6.3.4.1 B), then the cross for LEAVE (§6.5.2)
-// which the shipped budget already prices. AUTO points are paid at the higher AUTO column (Table 6-2).
+// `autoCycles` CORAL per ROBOT counting the preload (§6.3.4.1 B). LEAVE (§6.5.2) comes with it for free,
+// because G303-D stages every ROBOT straddling its starting line and the routine's first move is off it.
+// AUTO points are paid at the higher AUTO column (Table 6-2).
 function autoOf(ctx, plan) {
   const byLevel = { L1: 0, L2: 0, L3: 0, L4: 0 };
   const cap = { ...LEVEL_CAP };
@@ -290,8 +297,8 @@ export function estimateAlliance(ctx, plan, opts = {}) {
     // is not a committed action: the engine re-decides every 0.2 s while a ROBOT is moving, so the instant the
     // window opens the machine turns around and goes for a CAGE, and the CORAL it was chasing is never picked
     // up. What it costs to be interrupted is measurable rather than guessed — over 12 MATCHes at a 6 s window
-    // the fleet asked at t=144.0±0.3 and took 4.46 s (max 5.80) to get ON the pipe, ending with 1.92 DEEP,
-    // 1.00 SHALLOW and 0.08 PARK, i.e. essentially the same BARGE column a 20 s window gets. An interrupted
+    // the fleet asked at t=144.1 (max 144.5) and took 4.81 s (max 5.80) to get ON the pipe, ending with 1.83 DEEP,
+    // 1.00 SHALLOW and 0.08 PARK, i.e. essentially the same BARGE column a 20 s window gets (1.92/1.00/0.00). An interrupted
     // climb is as cheap as a clean one, so the test prices the climb at its own cost and adds nothing.
     // Whichever piece is cheaper per point of value wins the pick — the baseline's own test, not a rule the
     // planner can assume away. A machine the plan put on ALGAE duty has no say in it.
@@ -345,7 +352,7 @@ export function estimateAlliance(ctx, plan, opts = {}) {
   // And in a mirror the trip is not a gain. The planner can see the other side's ROBOTs but not its plan, so
   // the assumption it has to work on is that the same duty sits over there too, in which case every ring this
   // fleet carries home is a ring the other fleet takes off this REEF. The engine measures it: three machines
-  // on duty on BOTH sides book 8.69 PROCESSOR rings against 9.00 for a fleet told never to cross, so the
+  // on duty on BOTH sides book the same 9.00 ALGAE an ALLIANCE as a fleet told never to cross, so the
   // crossing moves the ALGAE around and loses a little of it to the drive. `opts.mirror: false` is the
   // one-sided reading the A/B arms use, where only this ALLIANCE is told to strip.
   const lost = opts.mirror === false ? 0 : crosses;

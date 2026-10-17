@@ -2,20 +2,19 @@
 // web/js/engine.js and the DOM, and keeps the two rules of this repo visible (n and the error bar, and
 // which numbers are rules).
 
-import { playMatch, evaluate } from './league.js';
-import { HUMAN_PLAYER, CHASSIS, PRESETS } from './model.js';
+import { playMatch, aggregate, matchSeed } from './league.js';
+import { HUMAN_PLAYER, CHASSIS, PRESETS, ROBOT_PRESETS, presetIndexOf } from './model.js';
 import { layout } from './model.js';
 import { drawField } from './viz.js';
 import { POINTS, GEO, FOULS, PIECES, TIME, FIELD, ROBOT_LIMITS } from './rules.js';
-import { BRANCH_SLOTS_PER_LEVEL, TROUGH_CAP } from './model.js';
+import { BRANCH_SLOTS_PER_LEVEL, TROUGH_CAP, CARRY_DROP_PER_SEC } from './model.js';
 
 const $ = (id) => document.getElementById(id);
 
 const PRESET_BY_KEY = new Map(PRESETS.map((p) => [p.key, p]));
-// Each ALLIANCE picks its own trio, so the page can put the two real 2025 Einstein finalists on the field
-// at once. The mirror is a checkbox rather than a preset: it is a statement about what the BATCH means
-// (strategy vs strategy) and not about which machines are on the carpet.
-const PRESET_OPTIONS = PRESETS.map((p) => ({ value: p.key, label: p.label, note: p.note, trio: p.trio }));
+// The two sides default to the pair that played the 2025 Einstein Field final, and each of the six machines
+// can then be swapped per slot from the card. The mirror is a checkbox rather than a preset: it is a statement
+// about what the BATCH means (strategy vs strategy) and not about which machines are on the carpet.
 
 function trioFor(side) {
   return state.mirror ? state.trios.blue : state.trios[side];
@@ -88,11 +87,16 @@ const state = {
   match: null,
   frame: 0,
   playing: false,
-  fill: false, // the CSS stand-in for fullscreen, used when the host refuses the request
+  fill: false, // the Fill layout (button, key C): the FIELD takes the page and the browser chrome stays
   speed: 1,
   timer: 0,
   raf: 0,
   anchor: null,
+  // The previous batch is kept so the next one can be read as a change rather than as four fresh numbers,
+  // and a settings snapshot is kept with it because two batches only mean "the effect of one change" while
+  // everything else stayed put.
+  prevBatch: null,
+  batch: null,
 };
 
 // HP fields: only `storage` is a rule (G435); the rest are [estimate] rates Stage 3 has to calibrate.
@@ -139,6 +143,14 @@ function specField(f, get, set) {
   return label;
 }
 
+// The small word in front of a card's dropdowns ("drivetrain", "preset"). Both pickers need one and the label
+// element is the only place the layout is decided.
+const capText = (txt) => {
+  const s = document.createElement('span');
+  s.textContent = txt;
+  return s;
+};
+
 function rosterCard(side, idx) {
   // trioFor, not state.trios: with the mirror ticked what Red actually drives is Blue's trio, and the cards
   // have to show the machines that are on the carpet rather than the ones parked in the other editor.
@@ -149,12 +161,50 @@ function rosterCard(side, idx) {
   title.className = 'robot-title';
   title.innerHTML = `<b>${p.name}</b><span>#${p.team} · ${Math.round(p.weightLb)} lb</span>`;
   wrap.appendChild(title);
+  // One preset per ROBOT, the way the 2026 page does it: a team fields its own three machines, so the choice
+  // is made at each slot and editing one number does not touch the other two. The card shows the machine it is
+  // showing — "Custom" the moment the numbers stop matching anybody else's.
+  const pickPreset = document.createElement('label');
+  pickPreset.className = 'pick preset';
+  const ps = document.createElement('select');
+  for (const r of ROBOT_PRESETS) {
+    const o = document.createElement('option');
+    o.value = r.key;
+    o.textContent = r.label;
+    o.title = r.note;
+    ps.appendChild(o);
+  }
+  const custom = document.createElement('option');
+  custom.value = '-1';
+  custom.textContent = 'Custom';
+  ps.appendChild(custom);
+  const note = document.createElement('span');
+  note.className = 'preset-note';
+  // The identity has to follow the numbers, not the last thing that was clicked: a card whose drive speed was
+  // edited is no longer #1690 Orbit's machine, and leaving the picker on a name the fields contradict is the
+  // one lie this control can tell. Every editor on the card calls it, and it touches only these two nodes so
+  // the input that just changed keeps its focus.
+  const syncPreset = () => {
+    const i = presetIndexOf(p);
+    ps.value = i >= 0 ? ROBOT_PRESETS[i].key : '-1';
+    note.textContent = i >= 0 ? ROBOT_PRESETS[i].note : 'edited on this card';
+  };
+  syncPreset();
+  ps.addEventListener('change', () => {
+    const r = ROBOT_PRESETS.find((x) => x.key === ps.value);
+    // Only this slot is replaced. The other two machines keep whatever they were, including any edits.
+    trioFor(side)[idx] = r ? clone(r.profile) : p;
+    buildSetup();
+  });
+  pickPreset.append(capText('preset'), ps, note);
+  wrap.appendChild(pickPreset);
   const specs = document.createElement('div');
   specs.className = 'specs';
   for (const f of SPEC_FIELDS) {
     specs.appendChild(specField(f, () => (f.get ? f.get(p) : p[f.key]), (v) => {
       if (f.set) f.set(p, v);
       else p[f.key] = v;
+      syncPreset();
     }));
   }
   wrap.appendChild(specs);
@@ -169,7 +219,7 @@ function rosterCard(side, idx) {
     ch.appendChild(o);
   }
   ch.value = p.chassis;
-  ch.addEventListener('change', () => { p.chassis = ch.value; });
+  ch.addEventListener('change', () => { p.chassis = ch.value; syncPreset(); });
   const cap = document.createElement('span');
   cap.textContent = 'drivetrain';
   pick.append(cap, ch);
@@ -210,24 +260,9 @@ function hpRow(side) {
   return wrap;
 }
 
-// Choosing a PRESET replaces one ALLIANCE's three machines wholesale. The cards below it stay the editor for
-// whatever is on the field, so the real 2025 alliances can be inspected and then nudged, and the note says
-// whose ledger the numbers came from.
-function buildPresetSelects() {
-  for (const side of ['blue', 'red']) {
-    const sel = $(`preset-${side}`);
-    sel.innerHTML = '';
-    for (const o of PRESET_OPTIONS) {
-      const op = document.createElement('option');
-      op.value = o.value;
-      op.textContent = o.label;
-      op.title = o.note;
-      sel.appendChild(op);
-    }
-    sel.value = side === 'blue' ? 'johnson' : 'newton';
-    sel.addEventListener('change', () => applyPreset(side, sel.value));
-    $(`preset-note-${side}`).textContent = PRESET_BY_KEY.get(sel.value).note;
-  }
+// The mirror is a statement about what the BATCH means (strategy vs strategy), not about which machines are on
+// the carpet, so it stays an ALLIANCE-level control while the machines themselves are chosen per slot.
+function buildRosterControls() {
   $('chk-mirror').addEventListener('change', (e) => {
     state.mirror = e.target.checked;
     setBatchLabel();
@@ -246,14 +281,6 @@ function setBatchLabel() {
   b.title = state.mirror
     ? 'Same trio on both ALLIANCES: the mean margin is the field-leak test, not a result'
     : 'Two different trios: the margin is a ROBOT comparison, so read the two means and not the winner';
-}
-
-function applyPreset(side, value) {
-  const opt = PRESET_OPTIONS.find((o) => o.value === value) || PRESET_OPTIONS[0];
-  state.trios[side] = opt.trio.map(clone);
-  $(`preset-note-${side}`).textContent = opt.note;
-  $(`preset-${side}`).value = opt.value;
-  buildSetup();
 }
 
 function buildSetup() {
@@ -297,6 +324,11 @@ function scenarioFromUI() {
     // false` is the engine that filled every branch every MATCH, `contactFouls: false` is the one that never
     // charges a hit.
     placementRisk: $('chk-place-risk').checked,
+    // #124 routes a drive around the hexagon instead of into it; #125 lets the drive itself shake a CORAL loose.
+    // Each off value is the engine as it was, and 0 for `carryDrop` spends no random number at all, so the
+    // control is the same MATCH rather than the same MATCH rolled differently.
+    detourOff: !$('chk-detour').checked,
+    carryDrop: $('chk-carry-drop').checked ? CARRY_DROP_PER_SEC : 0,
     contactFouls: $('chk-contact-fouls').checked,
     // 0 is the deterministic mirror: both ALLIANCES then play one process twice and land on the same
     // number, which is the artefact the field of machines is there to remove.
@@ -317,16 +349,18 @@ function setStatus(text, cls) {
   chip.className = 'chip' + (cls ? ' ' + cls : '');
 }
 
+// Module scope because the batch button switches to its own tab so the progress bar and the charts are on
+// screen while the MATCHes run, and a hidden canvas has no width to draw into.
+function showTab(name) {
+  for (const t of document.querySelectorAll('.tabs .tab')) t.classList.toggle('active', t.dataset.tab === name);
+  for (const b of document.querySelectorAll('.tab-body')) b.hidden = b.id !== `tab-${name}`;
+}
+
 function setScrub(frames) {
   const sc = $('rng-scrub');
   sc.max = String(Math.max(0, frames - 1));
   sc.value = '0';
   sc.step = '1';
-}
-
-function defendFor(side) {
-  const slots = [...document.querySelectorAll(`.defend[data-side="${side}"]`)].filter((i) => i.checked).map((i) => Number(i.dataset.slot));
-  return slots.length ? slots : null;
 }
 
 function runMatch() {
@@ -341,9 +375,15 @@ function runMatch() {
     scenarioOverride: scenarioFromUI(),
     blueProfiles: trioFor('blue'),
     redProfiles: trioFor('red'),
-    bluePolicyOpts: { defendSlots: defendFor('blue') },
-    redPolicyOpts: { defendSlots: defendFor('red') },
   });
+  showMatch(r);
+  setStatus(`seed ${seed} · ${Math.round(performance.now() - t0)} ms · ${r.frames.length} frames`, 'done');
+}
+
+// Loading a finished MATCH onto the field. A batch records its first MATCH for exactly this, so the
+// distribution on the Batch tab and the replay on the canvas are the same set of seeds rather than two
+// unrelated things the reader has to trust separately.
+function showMatch(r) {
   state.match = r;
   state.frame = 0;
   stop();
@@ -355,7 +395,6 @@ function runMatch() {
   renderEventList(r.events);
   renderPlanLog(r);
   paintFrame();
-  setStatus(`seed ${seed} · ${Math.round(performance.now() - t0)} ms · ${r.frames.length} frames`, 'done');
 }
 
 // state.frame is a float because playback advances by elapsed time, not by ticks. Indexing the frame
@@ -533,14 +572,29 @@ function stop() {
   state.raf = 0;
 }
 
-function stepTo(kind) {
+// The scrubber's marks and what the ‹ › buttons walk between are one set, so one list decides both. A mark
+// the page paints but no control can stop on is the complaint this answers: `foul` used to be missing here
+// while the buttons' own title promised it.
+const MARKS = ['foul', 'climb', 'fumble', 'drop', 'carry-drop'];
+
+function seekFrame(i) {
   if (!state.match) return;
-  const times = state.match.events.filter((e) => e.kind === kind || e.kind === 'climb' || e.kind === 'fumble' || e.kind === 'drop').map((e) => e.t);
-  const cur = frameAt(state.frame).t;
-  const i = kind === 'prev' ? times.filter((t) => t < cur - 0.25).pop() : times.find((t) => t > cur + 0.05);
-  if (i === undefined) return;
-  state.frame = Math.round(i / 0.2);
+  // `advance` recomputes the frame from the anchor it was handed at Play, so a jump made while the replay
+  // runs is overwritten on the next tick. Measured in the browser: pressing "event ›" at 1x moved the frame
+  // 7 → 8 and then 12 → 17, which is why the button read as dead. The scrubber's own handler already stops
+  // first; so does the 2026 build's goToTime. Every seek on this page now goes through here.
+  if (state.playing) stop();
+  state.frame = Math.max(0, Math.min(state.match.frames.length - 1, i));
   paintFrame();
+}
+
+function stepTo(dir) {
+  if (!state.match) return;
+  const times = state.match.events.filter((e) => MARKS.includes(e.kind)).map((e) => e.t);
+  const cur = frameAt(state.frame).t;
+  const t = dir === 'prev' ? times.filter((x) => x < cur - 0.25).pop() : times.find((x) => x > cur + 0.05);
+  if (t === undefined) return;
+  seekFrame(Math.round(t * FRAMES_PER_SEC));
 }
 
 function buildScrubMarks(events) {
@@ -550,11 +604,14 @@ function buildScrubMarks(events) {
   for (const e of events) {
     // A CORAL that fell off a BRANCH is the fault the carpet shows, so the scrubber marks it: the pieces are
     // on the ground for about a second each, and without a mark to jump to there is no way to stop on one.
-    if (e.kind !== 'foul' && e.kind !== 'climb' && e.kind !== 'fumble' && e.kind !== 'drop') continue;
+    if (!MARKS.includes(e.kind)) continue;
     const i = document.createElement('i');
     i.className = e.kind === 'foul' ? '' : e.kind;
     i.style.left = `min(${(e.t / span) * 100}%, calc(100% - 2px))`;
     i.title = `${e.t.toFixed(1)}s ${e.kind}${e.code ? ' ' + e.code : ''}`;
+    // The mark is clickable because it is the thing on the track that says "something happened here"; the
+    // 2026 page already jumps from its marks, and a mark you can only look at sends you back to ‹ ›.
+    i.addEventListener('click', () => seekFrame(Math.round(e.t * FRAMES_PER_SEC)));
     wrap.appendChild(i);
   }
 }
@@ -694,8 +751,9 @@ function renderRobotsTable(final) {
       const cells = [
         `${side === 'blue' ? 'B' : 'R'}${r.slot + 1} #${r.team} · ${r.tempo}×`,
         // A CORAL that fell off is not a miss of the same kind as a fumble: §6.5.1's BRANCH test failed, so
-        // the column is next to the levels it was aimed at rather than hidden in the picks count.
-        `${p.L1}/${p.L2}/${p.L3}/${p.L4}${r.dropped ? ` · ${r.dropped} fell` : ''}`,
+        // the column is next to the levels it was aimed at rather than hidden in the picks count. The two
+        // ways it came off are named apart — off a BRANCH, or off the carrier while it was driving.
+        `${p.L1}/${p.L2}/${p.L3}/${p.L4}${r.dropped ? ` · ${r.dropped} fell` : ''}${r.carryDropped ? ` · ${r.carryDropped} shaken` : ''}`,
         `${r.processor} proc${r.netScored ? ` / ${r.netScored} NET` : ''} / ${r.strips} strip${r.defend ? ` / ${Math.round(r.defend)}s defend` : ''}`,
         String(r.picked + r.strips),
         r.climb ? `${r.climb} C${r.climbCage + 1}` : r.left ? 'left' : '—',
@@ -725,12 +783,19 @@ function renderEventList(events) {
     leave: 'LEAVE',
     unstick: 'backed out of a pile-up',
     drop: (e) => `CORAL ${e.level} fell off (${e.aimErr}° off the BRANCH)`,
+    'carry-drop': 'CORAL shaken loose by the drive',
   };
   for (const e of rows) {
     const line = document.createElement('div');
     const who = e.side ? `${e.side[0].toUpperCase()}${(e.slot ?? 0) + 1}` : '';
     const label = e.kind === 'place' ? `CORAL ${e.level} in AUTO` : e.kind === 'climb' ? `CAGE ${e.level}` : e.kind === 'foul' ? `${e.code} ${e.sev}${e.card === 'RED' ? ' + RED CARD, out for the MATCH' : e.card === 'YELLOW' ? ' + YELLOW' : ''}` : e.kind === 'fumble' ? `dropped ${e.intent}` : e.kind === 'net' ? (e.by === 'robot' ? 'NET +4 lifted in by the ROBOT' : 'NET +4 thrown') : typeof LABEL[e.kind] === 'function' ? LABEL[e.kind](e) : LABEL[e.kind] || e.kind;
     line.innerHTML = `<b>${e.t.toFixed(1)}s</b> ${who} ${label}`;
+    // Reading the ledger and stopping the replay on the line you just read is one gesture, the way the 2026
+    // page's rows are. Every row carries a time, so every row goes there — not only the ones the scrubber
+    // marks; a NET throw is worth looking at even though it is not a fault.
+    line.className = 'ev';
+    line.title = 'jump to this';
+    line.addEventListener('click', () => seekFrame(Math.round(e.t * FRAMES_PER_SEC)));
     box.appendChild(line);
   }
 }
@@ -760,14 +825,16 @@ function renderPlanLog(r) {
     const pin = p.plan.pins;
     const endgame = pin.cutoff > 0 ? `a cycle needs ${pin.cutoff} s of clock to spare${pin.spend ? ', and the hopper is spent before the CAGE' : ''}` : 'no clock budget on a cycle';
     const claim = pin.claim > 0 ? `a piece a teammate is bound for costs ${pin.claim.toFixed(2)} s of drive` : 'every machine bids the nearest piece';
-    out.appendChild(card(`${side} commit window`, `${p.plan.climbWindowSec} s of MATCH left`, `ALGAE duty: ${p.plan.algaeSlots ? `machine ${p.plan.algaeSlots.join(' and ')}` : 'nobody — the model prices the crossing'} · CORAL STATIONs: ${p.plan.spread ? 'split, both pockets worked' : 'all three at the nearer one'} · aiming ${p.plan.placeOrder.join('/')} · ${endgame} · ${claim} · ${list.length} re-solves through TELEOP${byEvent ? `, ${byEvent} of them after the fleet lost a machine` : ''}`));
+    const press = pin.press > 0 ? `a press has to beat the cycle it replaces at ${pin.press.toFixed(2)} points a press-second` : 'defense is not on the menu';
+    const autoCrowd = pin.auto > 0 ? `the three AUTO paths price an ally already at the same CORAL MARK at ${pin.auto} s of drive` : 'AUTO: all three bid the nearest MARK';
+    out.appendChild(card(`${side} commit window`, `${p.plan.climbWindowSec} s of MATCH left`, `ALGAE duty: ${p.plan.algaeSlots ? `machine ${p.plan.algaeSlots.join(' and ')}` : 'nobody — the model prices the crossing'} · CORAL STATIONs: ${p.plan.spread ? 'split, both pockets worked' : 'all three at the nearer one'} · aiming ${p.plan.placeOrder.join('/')} · ${autoCrowd} · ${endgame} · ${claim} · ${press} · ${list.length} re-solves through TELEOP${byEvent ? `, ${byEvent} of them after the fleet lost a machine` : ''}`));
     out.appendChild(card(`${side} first move`, switches.length ? `t = ${switches[0].t.toFixed(0)} s → ${switches[0].switchTo} s` : 'never moved', switches.length ? `the model expected +${switches[0].gain.toFixed(1)} points against the opening plan` : 'no plan ever beat the opening one by more than the churn allowance'));
     out.appendChild(card(`${side} fleet pace`, `${p.plan.efficiency.toFixed(2)}× the straight-line cycle`, last ? `at t = ${last.t.toFixed(0)} s the REEF still had ${last.free} slots · ${switches.length} switch${switches.length === 1 ? '' : 'es'}` : 'planned once'));
   }
 }
 
 // ---------------------------------------------------------------------------
-// batch measurements
+// batch measurements (the Monte-Carlo button)
 // ---------------------------------------------------------------------------
 function card(k, v, n) {
   const d = document.createElement('div');
@@ -779,33 +846,412 @@ function card(k, v, n) {
   return d;
 }
 
-function batch(kind) {
-  const out = $('batch-out');
-  const matches = kind === 'mirror' ? 48 : 24;
-  setStatus(`Running ${matches} MATCHes`, 'busy');
-  const base = 1000 + Math.floor(Math.random() * 9000);
+const meanSe = (a, b) => `${a.toFixed(1)} ± ${b.toFixed(1)}`;
+const pctOf = (v) => `${(v * 100).toFixed(0)}%`;
+const signed = (v, d = 1) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(d)}`;
+
+// The label names the machines, because a batch of two different rosters is a ROBOT comparison and the
+// preset keys would not say which three cars were actually on the carpet — they can be edited per slot now.
+const roster = (side) => trioFor(side).map((p) => `${p.team === 1 || p.team === 2 || p.team === 3 ? p.name : `#${p.team} ${p.name}`}`).join('/');
+
+// ---------------------------------------------------------------------------------------------
+// Worker plumbing. The batch is engine work rather than page work, and doing it off-thread is what keeps
+// the field animating and the click handlers answering while it runs. A host that refuses module workers
+// gets the same loop on this thread — see `runBatch` — because a silently rejected `new Worker()` is the
+// same frozen button this repo has already been bitten by twice.
+// ---------------------------------------------------------------------------------------------
+let worker = null;
+let workerDead = false;
+const pending = new Map();
+let msgId = 0;
+
+function ensureWorker() {
+  if (workerDead) return null;
+  if (worker) return worker;
+  try {
+    worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+  } catch (e) {
+    workerDead = true;
+    return null;
+  }
+  worker.onmessage = (ev) => {
+    const { id, type, payload } = ev.data || {};
+    const entry = pending.get(id);
+    if (!entry) return;
+    if (type === 'progress') {
+      entry.onProgress?.(payload);
+      return;
+    }
+    pending.delete(id);
+    if (type === 'error') entry.reject(new Error(payload));
+    else entry.resolve(payload);
+  };
+  // A worker that dies mid-batch would otherwise leave its promise unresolved forever, which from the page
+  // looks identical to a button that was never wired up.
+  worker.onerror = (e) => {
+    workerDead = true;
+    for (const entry of pending.values()) entry.reject(new Error(e.message || 'the worker stopped'));
+    pending.clear();
+    worker = null;
+  };
+  return worker;
+}
+
+function askWorker(type, payload, onProgress) {
+  const w = ensureWorker();
+  if (!w) return Promise.reject(new Error('no worker in this host'));
+  const id = ++msgId;
+  return new Promise((resolve, reject) => {
+    pending.set(id, { resolve, reject, onProgress });
+    try {
+      w.postMessage({ id, type, payload });
+    } catch (e) {
+      pending.delete(id);
+      reject(e);
+    }
+  });
+}
+
+// A MATCH is ~0.3 s of the engine and a batch is dozens of them, so the old synchronous loop froze the tab
+// for a quarter of a minute with nothing on screen to say it was working. One MATCH per frame keeps the
+// field, the progress bar and the rest of the page alive, and costs the wall clock almost nothing next to
+// the simulation itself. Which host answers first is not knowable from here: a foreground tab gives a frame
+// every ~16 ms, while a window the compositor has stopped drawing clamps `setTimeout` to half a second and a
+// 48-MATCH batch would then spend more time waiting than simulating. So ask for a frame and put a short
+// timer underneath it.
+const nextTick = () => new Promise((res) => {
+  let done = false;
+  const finish = () => { if (done) return; done = true; res(); };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(finish);
+  setTimeout(finish, 60);
+});
+
+function setProgress(frac, label) {
+  const box = $('progress');
+  if (!box) return;
+  box.hidden = frac == null;
+  if (frac == null) return;
+  $('progress-bar').style.width = `${Math.round(frac * 100)}%`;
+  $('progress-label').textContent = label || '';
+}
+
+function setBusy(on) {
+  for (const id of ['btn-run', 'btn-new', 'btn-batch', 'btn-bench']) {
+    const el = $(id);
+    if (el) el.disabled = on;
+  }
+}
+
+async function runBatch(kind) {
+  const matches = Math.max(4, Math.min(240, parseInt($('inp-matches').value, 10) || 48));
+  $('inp-matches').value = String(matches);
+  const seedBase = Math.max(1, parseInt($('inp-batchseed').value, 10) || 51000);
+  $('inp-batchseed').value = String(seedBase);
+  showTab('bench');
   const blueKind = $('sel-blue-kind').value;
   const redKind = kind === 'bench' ? 'random' : $('sel-red-kind').value;
+  const scenario = scenarioFromUI();
+  const profiles = { blue: trioFor('blue'), red: trioFor('red') };
+  setBusy(true);
+  setStatus(`Running ${matches} MATCHes`, 'busy');
   const t0 = performance.now();
-  const e = evaluate({
+  let summary = null;
+  let recorded = null;
+  try {
+    const out = await askWorker(
+      'batch',
+      { blueKind, redKind, matches, seedBase, scenario, profiles },
+      (p) => setProgress(p.done / p.total, `${p.done}/${p.total}`),
+    );
+    summary = out.summary;
+    recorded = out.recorded;
+  } catch (err) {
+    // Same loop, this thread, one MATCH per frame. Slower to answer a click, never slower to finish.
+    setStatus(`No worker here (${err.message}) — running them on this thread`, 'busy');
+    const records = [];
+    for (let i = 0; i < matches; i++) {
+      const r = playMatch({
+        blueKind,
+        redKind,
+        seed: matchSeed(seedBase, i),
+        record: i === 0,
+        scenarioOverride: scenario,
+        blueProfiles: profiles.blue,
+        redProfiles: profiles.red,
+      });
+      if (i === 0) recorded = r;
+      records.push(r);
+      setProgress((i + 1) / matches, `${i + 1}/${matches}`);
+      await nextTick();
+    }
+    summary = aggregate(records);
+  }
+  setProgress(null);
+  setBusy(false);
+  state.batch = summary;
+  const ran = {
+    matches,
+    seedBase,
     blueKind,
     redKind,
+    ms: Math.round(performance.now() - t0),
+    snapshot: batchSnapshot({ matches, seedBase, blueKind, redKind, scenario }),
+  };
+  renderBatch(summary, ran, kind);
+  // The first MATCH of the batch goes on the field, so the distribution and the replay are the same seeds
+  // rather than two things the reader has to trust separately.
+  if (recorded) showMatch(recorded);
+  setStatus(`${ran.ms} ms · ${matches} MATCHes · seedBase ${seedBase}`, 'done');
+  state.prevBatch = { ...e, ...ran };
+}
+
+// Everything a batch can be given, in one object, so the next batch can say which single thing moved.
+function batchSnapshot({ matches, seedBase, blueKind, redKind, scenario }) {
+  return {
     matches,
-    seedBase: base,
-    profiles: { blue: trioFor('blue'), red: trioFor('red') },
-    scenarioOverride: scenarioFromUI(),
-    bluePolicyOpts: { defendSlots: defendFor('blue') },
-    redPolicyOpts: { defendSlots: defendFor('red') },
-  });
+    seedBase,
+    blueKind,
+    redKind,
+    mirror: state.mirror,
+    trioBlue: JSON.stringify(trioFor('blue')),
+    trioRed: JSON.stringify(trioFor('red')),
+    jitter: scenario.tempoJitter,
+    fouls: scenario.foulsOff,
+    contact: scenario.contactRestitution === undefined,
+    placeRisk: scenario.placementRisk,
+    hpNet: scenario.algaeInNetByHuman,
+    turnRamp: scenario.turnRampOff,
+    detour: !scenario.detourOff,
+    carryDrop: scenario.carryDrop,
+    playoff: scenario.playoff,
+  };
+}
+
+const DIFF_LABEL = {
+  matches: 'the MATCH count',
+  seedBase: 'the batch seed base (a different family of MATCHes)',
+  blueKind: "blue's strategy",
+  redKind: "red's strategy",
+  mirror: 'the mirror',
+  trioBlue: 'the blue ROBOTS',
+  trioRed: 'the red ROBOTS',
+  jitter: 'the tempo jitter',
+  fouls: 'the foul switch',
+  contact: 'the bumper-impulse switch',
+  placeRisk: 'the CORAL-miss switch',
+  hpNet: "the HUMAN PLAYER's NET throws",
+  turnRamp: 'the turn-ramp switch',
+  detour: 'steer-around-the-REEF switch',
+  carryDrop: 'the CORAL-falls-on-the-drive switch',
+  playoff: 'Qualification vs Playoff',
+};
+
+function renderBatchDelta(e, ran) {
+  const host = $('batch-delta');
+  host.innerHTML = '';
+  const prev = state.prevBatch;
+  if (!prev) {
+    const p = document.createElement('p');
+    p.className = 'hint';
+    p.textContent = 'This is the first batch of the session, so there is nothing to compare it against yet. Run it again after changing one control and the line below prices that change.';
+    host.appendChild(p);
+    return;
+  }
+  const changed = Object.keys(ran.snapshot).filter((k) => ran.snapshot[k] !== prev.snapshot[k]).map((k) => DIFF_LABEL[k] || k);
+  const note = document.createElement('p');
+  note.className = 'hint';
+  note.textContent = changed.length === 0
+    ? 'Same settings as the previous batch, so the move below is engine noise on the same MATCHes.'
+    : changed.length === 1
+      ? `One thing changed since the previous batch (${changed[0]}), so the move below is that setting's effect and nothing else.`
+      : `${changed.length} settings changed (${changed.join(', ')}), so this compares two different questions rather than one change.`;
+  host.appendChild(note);
+  const cell = (name, a, b, digits = 1) => {
+    const d = a - b;
+    const span = document.createElement('span');
+    span.className = 'delta-cell';
+    span.textContent = `${name} ${b.toFixed(digits).replace('-', '−')} → ${a.toFixed(digits).replace('-', '−')} (${signed(d, digits)})`;
+    span.dataset.dir = Math.abs(d) < 0.05 ? 'flat' : d > 0 ? 'up' : 'down';
+    return span;
+  };
+  const line = document.createElement('p');
+  line.className = 'delta-line';
+  line.appendChild(document.createTextNode(`Against the previous batch (${prev.matches} MATCHes, seedBase ${prev.seedBase}): `));
+  for (const c of [
+    cell('blue win', e.winRate * 100, prev.winRate * 100, 1),
+    cell('blue mean', e.avgBlue, prev.avgBlue, 1),
+    cell('red mean', e.avgRed, prev.avgRed, 1),
+    cell('margin', e.avgMargin, prev.avgMargin, 1),
+    cell('blue RP', e.avgRpBlue, prev.avgRpBlue, 2),
+  ]) line.appendChild(c);
+  host.appendChild(line);
+}
+
+function renderBatch(e, ran, kind) {
+  const out = $('batch-out');
   out.innerHTML = '';
-  const meanSe = (a, b) => `${a.toFixed(1)} ± ${b.toFixed(1)}`;
-  const rosters = state.mirror ? `${trioFor('blue')[0].name} trio on both ALLIANCES` : `${$('preset-blue').value} blue vs ${$('preset-red').value} red`;
-  out.appendChild(card(kind === 'bench' ? 'Greedy (blue) mean' : 'Blue mean', meanSe(e.avgBlue, e.blueSe), `n=${matches} MATCHes, seedBase ${base}, ${rosters}`));
-  out.appendChild(card('Red mean', meanSe(e.avgRed, e.redSe), rosters));
+  const rosters = state.mirror ? `${roster('blue')} trio on both ALLIANCES` : `${roster('blue')} blue vs ${roster('red')} red`;
+  const scope = $('batch-scope');
+  scope.textContent = `${kind === 'bench' ? 'Baseline check' : state.mirror ? 'Mirror batch' : 'Two-roster batch'} · ${ran.matches} MATCHes · seedBase ${ran.seedBase} (stride 977) · ${ran.blueKind} blue vs ${ran.redKind} red · ${rosters} · ${ran.ms} ms`;
+  out.appendChild(card(kind === 'bench' ? 'Greedy (blue) mean' : 'Blue mean', meanSe(e.avgBlue, e.blueSe), `worst ${e.worstBlue} to best ${e.bestBlue}, n=${ran.matches}`));
+  out.appendChild(card('Red mean', meanSe(e.avgRed, e.redSe), `worst ${e.worstRed} to best ${e.bestRed}`));
   out.appendChild(card('Margin', meanSe(e.avgMargin, e.marginSe), state.mirror ? (e.marginSe > 0.5 ? 'blue minus red; a mirror margin is the field-leak test' : 'indistinguishable from zero') : 'blue minus red across two trios: a ROBOT comparison, not a leak'));
-  out.appendChild(card('Blue win rate', `${(e.winRate * 100).toFixed(1)} ± ${(e.winSe * 100).toFixed(1)}%`, `${e.blueWins}W ${e.ties}T of ${matches}`));
+  out.appendChild(card('Blue win rate', `${(e.winRate * 100).toFixed(1)} ± ${(e.winSe * 100).toFixed(1)}%`, `${e.blueWins}W ${e.redWins}L ${e.ties}T, ties counted half`));
   out.appendChild(card('RP mean', `${e.avgRpBlue.toFixed(2)} / ${e.avgRpRed.toFixed(2)}`, 'auto + coral + barge + win/tie'));
-  setStatus(`${Math.round(performance.now() - t0)} ms · ${matches} MATCHes`, 'done');
+  out.appendChild(card('Spread of a MATCH', `± ${(Math.max(e.blueSe, e.redSe) * 1.96).toFixed(0)} pt`, 'the 95% band on one ALLIANCE: the same strategy loses by this much sometimes'));
+
+  const labels = [];
+  for (let i = 0; i < e.blueScoreHist.length; i++) labels.push(i % 2 === 0 ? String(e.bin.lo + i * e.bin.size) : '');
+  histChart($('chart-score'), [
+    { values: e.blueScoreHist, css: '--blue' },
+    { values: e.redScoreHist, css: '--red' },
+  ], labels);
+  const mLabels = [];
+  const mb = e.marginHist.length;
+  for (let i = 0; i < mb; i++) mLabels.push(i % 2 === 0 ? String(-e.bin.marginEdge + i * e.bin.size) : '');
+  histChart($('chart-margin'), [{ values: e.marginHist, css: '--good' }], mLabels);
+  $('chart-note').textContent = `Bins are ${e.bin.size} points on fixed edges, not per-batch quantiles, so two batches drawn on the same axis can be compared by eye. Each score bin draws BLUE first, then RED; the margin chart is blue minus red, and a bar left of zero is a MATCH blue lost.`;
+
+  const rpRows = [
+    ['AUTO RP', 'all three LEAVE and ≥3 CORAL placed in AUTO (Table 6-2)'],
+    ['CORAL RP', '4 CORAL at each of L2-L4, or 3 with the Coopertition point'],
+    ['BARGE RP', '≥12 BARGE points'],
+    ['Win RP', '3 for the winner'],
+    ['Tie RP', '1 each'],
+  ];
+  const list = $('rp-list');
+  list.innerHTML = '';
+  rpRows.forEach(([name, note], i) => {
+    const key = ['auto', 'coral', 'barge', 'win', 'tie'][i];
+    const row = document.createElement('div');
+    row.className = 'rp-row';
+    const label = document.createElement('span');
+    label.innerHTML = '<b></b><br /><small class="hint"></small>';
+    label.querySelector('b').textContent = name;
+    label.querySelector('small').textContent = note;
+    const nums = document.createElement('strong');
+    nums.className = 'mono';
+    nums.textContent = `${pctOf(e.rp.blue[key])} / ${pctOf(e.rp.red[key])}`;
+    row.appendChild(label);
+    row.appendChild(nums);
+    for (const side of ['blue', 'red']) {
+      const bar = document.createElement('div');
+      bar.className = `rp-bar ${side}`;
+      const fill = document.createElement('i');
+      fill.style.width = `${Math.round(e.rp[side][key] * 100)}%`;
+      bar.appendChild(fill);
+      row.appendChild(bar);
+    }
+    list.appendChild(row);
+  });
+  $('rp-note').textContent = 'Chance a MATCH ends with that RP, blue then red. Table 6-2 pays an RP for the whole ALLIANCE, so these are all-or-nothing per MATCH, not averages.';
+
+  const d = e.detail;
+  fillTable($('batch-table'), [
+    ['what a MATCH produces', 'blue', 'red'],
+    ['CORAL points', d.blue.coralPoints.toFixed(1), d.red.coralPoints.toFixed(1)],
+    ['of those, placed in AUTO', `${d.blue.autoCoral.toFixed(1)} CORAL`, `${d.red.autoCoral.toFixed(1)} CORAL`],
+    ['LEAVE', d.blue.leave.toFixed(2), d.red.leave.toFixed(2)],
+    ['ALGAE points', d.blue.algaePoints.toFixed(1), d.red.algaePoints.toFixed(1)],
+    ['PROCESSOR / NET', `${d.blue.processor.toFixed(1)} / ${d.blue.net.toFixed(1)}`, `${d.red.processor.toFixed(1)} / ${d.red.net.toFixed(1)}`],
+    ['BARGE points', d.blue.bargePoints.toFixed(1), d.red.bargePoints.toFixed(1)],
+    ['DEEP / SHALLOW / PARK', `${d.blue.deep.toFixed(2)} / ${d.blue.shallow.toFixed(2)} / ${d.blue.park.toFixed(2)}`, `${d.red.deep.toFixed(2)} / ${d.red.shallow.toFixed(2)} / ${d.red.park.toFixed(2)}`],
+    ['Coopertition point', d.blue.coop.toFixed(2), d.red.coop.toFixed(2)],
+    ['Foul points credited', d.blue.foulsWon.toFixed(2), d.red.foulsWon.toFixed(2)],
+    ['Best MATCH score', e.bestBlue, e.bestRed],
+    ['Worst MATCH score', e.worstBlue, e.worstRed],
+    ['Best / worst margin', `${signed(e.bestMargin)} / ${signed(e.worstMargin)}`, `${signed(-e.worstMargin)} / ${signed(-e.bestMargin)}`],
+  ]);
+  const foul = e.foulByRobot;
+  const fRows = [['seat', 'fouls a MATCH', 'which clauses']];
+  if (!foul.length) fRows.push(['nobody', '0', 'neither fleet drove into an opponent on these seeds — the fouls this model has to offer are geometric, so an empty row is a statement about the plans, not about the rule table']);
+  for (const row of foul) {
+    fRows.push([
+      `${row.side} ${row.slot + 1} · ${row.name}`,
+      row.fouls.toFixed(2),
+      Object.entries(row.codes).map(([code, per]) => `${code}×${per.toFixed(2)}`).join(' · '),
+    ]);
+  }
+  fillTable($('batch-foul-table'), fRows, false);
+  $('batch-foul-note').textContent = foul.length
+    ? `Table 6-6 charges a MINOR as 5 points and a MAJOR as 15 to the other ALLIANCE; across this batch blue conceded ${e.foulPoints.blue.toFixed(1)} points a MATCH and red ${e.foulPoints.red.toFixed(1)}.`
+    : 'The clause counts below would be where a defensive plan shows up: G421 is one ROBOT across the BARGE ZONE, G425 a PIN, G427 inside the opponent zone.';
+  renderBatchDelta(e, ran);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Chart helpers (plain canvas, no libraries). Same construction as the 2026 page: the backing store
+// is the displayed box times devicePixelRatio, so a 1 px gridline is 1 px on a HiDPI screen.
+// ---------------------------------------------------------------------------------------------
+const CHART_GRID = '#1e2836';
+const CHART_AXIS = '#6f809b';
+
+function prepCanvas(canvas, fallbackW = 320, fallbackH = 130) {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const w = canvas.clientWidth || fallbackW;
+  const h = canvas.clientHeight || fallbackH;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  return { ctx, w, h };
+}
+
+function histChart(canvas, series, labels) {
+  if (!canvas) return;
+  const { ctx, w, h } = prepCanvas(canvas);
+  const padL = 26;
+  const padB = 15;
+  const padT = 10;
+  const plotH = Math.max(1, h - padB - padT);
+  const k = series[0].values.length;
+  const max = Math.max(1, ...series.reduce((a, s) => a.concat(s.values), []));
+  ctx.font = '9px ui-monospace, monospace';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  for (const f of [0, 0.5, 1]) {
+    const y = h - padB - f * plotH;
+    ctx.strokeStyle = f === 0 ? '#33415a' : CHART_GRID;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padL, y + 0.5);
+    ctx.lineTo(w - 4, y + 0.5);
+    ctx.stroke();
+    ctx.fillStyle = CHART_AXIS;
+    ctx.fillText(String(Math.round(max * f)), padL - 5, y);
+  }
+  const bw = (w - padL - 4) / k;
+  const barW = Math.max(1.5, (bw - 3) / series.length);
+  series.forEach((s, j) => {
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue(s.css).trim() || '#2f7de1';
+    s.values.forEach((v, i) => {
+      if (!v) return;
+      const bh = (plotH * v) / max;
+      ctx.fillRect(padL + i * bw + 1.5 + j * barW, h - padB - bh, barW, bh);
+    });
+  });
+  ctx.fillStyle = CHART_AXIS;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  labels.forEach((lb, i) => {
+    if (!lb) return;
+    ctx.fillText(lb, padL + i * bw + bw / 2, h - 4);
+  });
+}
+
+function redrawBatchCharts() {
+  const e = state.batch;
+  if (!e) return;
+  const labels = [];
+  for (let i = 0; i < e.blueScoreHist.length; i++) labels.push(i % 2 === 0 ? String(e.bin.lo + i * e.bin.size) : '');
+  histChart($('chart-score'), [
+    { values: e.blueScoreHist, css: '--blue' },
+    { values: e.redScoreHist, css: '--red' },
+  ], labels);
+  const mLabels = [];
+  for (let i = 0; i < e.marginHist.length; i++) mLabels.push(i % 2 === 0 ? String(-e.bin.marginEdge + i * e.bin.size) : '');
+  histChart($('chart-margin'), [{ values: e.marginHist, css: '--good' }], mLabels);
 }
 
 // ---------------------------------------------------------------------------
@@ -862,14 +1308,16 @@ function buildRuleTables() {
   fillTable(f, frows);
 }
 
-function fillTable(el, rows) {
+// `monoLast` is false for the tables whose last column is prose (the clause list of a seat's fouls), where
+// right-aligning a sentence reads as a mistake.
+function fillTable(el, rows, monoLast = true) {
   el.innerHTML = '';
   rows.forEach((r, i) => {
     const tr = document.createElement('tr');
     r.forEach((c, j) => {
       const cell = document.createElement(i === 0 ? 'th' : 'td');
       cell.textContent = String(c);
-      if (i > 0 && j > 0 && j === r.length - 1) cell.className = 'mono';
+      if (monoLast && i > 0 && j > 0 && j === r.length - 1) cell.className = 'mono';
       tr.appendChild(cell);
     });
     el.appendChild(tr);
@@ -913,17 +1361,22 @@ function importMatch(file) {
   fr.readAsText(file);
 }
 
-// Fullscreen is a request, not a guarantee: an embedded preview panel rejects it with "Permissions check
-// failed", and a rejected promise nobody looks at is exactly a button that does nothing. `body.fill` is the
-// same layout without the browser chrome disappearing, so the control always has a visible effect and the
-// Esc key still means "leave".
+// Fill and true fullscreen are two different asks, and the page now has a button for each. Fill is a
+// promise the page keeps by itself — the FIELD takes the viewport, the other panels step aside, the browser
+// chrome stays — so it is the mode to use when jumping between this tab and something else. Fullscreen
+// hands the panel to the browser and the chrome goes too, but it is a request, not a guarantee: an embedded
+// preview panel rejects it with "Permissions check failed", and a rejected promise nobody looks at is
+// exactly a button that does nothing. The Fill layout is therefore also what the Fullscreen button falls
+// back to, so the control always has a visible effect and Esc still means "leave".
 function setFill(on) {
   state.fill = on;
   document.body.classList.toggle('fill', on);
-  // The button is the only way back for anyone who cannot use the keyboard, so it has to read as a toggle
-  // in the fallback layout too — not just once true fullscreen reports fullscreenchange.
-  const btn = $('btn-fs');
-  if (btn) btn.textContent = on || document.fullscreenElement ? 'Exit fullscreen' : 'Fullscreen';
+  const btn = $('btn-fill');
+  if (btn) btn.textContent = on ? 'Exit fill' : 'Fill';
+  // Each button owns its own label: the fullscreen one follows `fullscreenchange`, this one follows the
+  // Fill toggle, and a fallback that lands here has to leave the other reading "Fullscreen".
+  const fs = $('btn-fs');
+  if (fs) fs.textContent = document.fullscreenElement ? 'Exit fullscreen' : 'Fullscreen';
   requestAnimationFrame(paintFrame);
 }
 
@@ -931,8 +1384,6 @@ function toggleFullscreen() {
   const panel = document.querySelector('.field-panel');
   if (document.fullscreenElement) {
     document.exitFullscreen();
-  } else if (state.fill) {
-    setFill(false);
   } else if (panel.requestFullscreen) {
     panel.requestFullscreen({ navigationUI: 'hide' }).catch(() => setFill(true));
   } else {
@@ -948,20 +1399,22 @@ function keys(ev) {
     setFill(false);
     return;
   }
+  // Same reason as Esc: Fill is a layout, not a step through a MATCH, so it works on an empty field.
+  if (ev.key === 'c' || ev.key === 'C') {
+    ev.preventDefault();
+    setFill(!state.fill);
+    return;
+  }
   const n = state.match ? state.match.frames.length : 0;
   if (!n) return;
-  const jump = (i) => {
-    state.frame = Math.max(0, Math.min(n - 1, i));
-    paintFrame();
-  };
   const map = {
     ' ': () => (state.playing ? stop() : play()),
     '[': () => stepTo('prev'),
     ']': () => stepTo('next'),
-    Home: () => jump(0),
-    End: () => jump(n - 1),
-    ArrowLeft: () => jump(state.frame - 5),
-    ArrowRight: () => jump(state.frame + 5),
+    Home: () => seekFrame(0),
+    End: () => seekFrame(n - 1),
+    ArrowLeft: () => seekFrame(state.frame - 5),
+    ArrowRight: () => seekFrame(state.frame + 5),
     f: toggleFullscreen,
   };
   const fn = map[ev.key];
@@ -981,14 +1434,15 @@ function bind() {
     runMatch();
     play();
   });
-  $('btn-batch').addEventListener('click', () => batch('mirror'));
-  $('btn-bench').addEventListener('click', () => batch('bench'));
+  $('btn-batch').addEventListener('click', () => runBatch('mirror'));
+  $('btn-bench').addEventListener('click', () => runBatch('bench'));
   $('btn-play').addEventListener('click', () => (state.playing ? stop() : play()));
   $('btn-ev-prev').addEventListener('click', () => stepTo('prev'));
   $('btn-ev-next').addEventListener('click', () => stepTo('next'));
   $('btn-export').addEventListener('click', exportMatch);
   $('btn-import').addEventListener('click', () => $('inp-import').click());
   $('inp-import').addEventListener('change', (e) => e.target.files[0] && importMatch(e.target.files[0]));
+  $('btn-fill').addEventListener('click', () => setFill(!state.fill));
   $('btn-fs').addEventListener('click', toggleFullscreen);
   // The browser owns leaving true fullscreen (its own Esc), and nothing else tells the page, so the label
   // and the repaint have to follow that event. setFill owns the label so the two cannot disagree.
@@ -1002,10 +1456,6 @@ function bind() {
   });
   // One delegated handler for the rail: a tab is a display change, not a new run, so nothing here may
   // touch the MATCH. The topbar buttons are the same control from the other end of the page.
-  const showTab = (name) => {
-    for (const t of document.querySelectorAll('.tabs .tab')) t.classList.toggle('active', t.dataset.tab === name);
-    for (const b of document.querySelectorAll('.tab-body')) b.hidden = b.id !== `tab-${name}`;
-  };
   for (const t of document.querySelectorAll('.tabs .tab')) {
     t.addEventListener('click', () => showTab(t.dataset.tab));
   }
@@ -1017,7 +1467,10 @@ function bind() {
     paintFrame();
   });
   for (const id of ['chk-labels', 'chk-targets', 'chk-numbers']) $(id).addEventListener('change', paintFrame);
-  window.addEventListener('resize', paintFrame);
+  window.addEventListener('resize', () => {
+    paintFrame();
+    redrawBatchCharts();
+  });
   // The panel can turn into a real tab mid-playback; re-enter the loop so it picks up the display clock.
   document.addEventListener('visibilitychange', () => {
     if (state.playing) play();
@@ -1025,7 +1478,7 @@ function bind() {
   document.addEventListener('keydown', keys);
 }
 
-buildPresetSelects();
+buildRosterControls();
 buildRuleTables();
 bind();
 // A match on load: the page should never present an empty canvas, and the first number a visitor sees

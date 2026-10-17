@@ -3,7 +3,6 @@
 
 import { INTENT } from './engine.js';
 import { LEVELS } from './engine.js';
-import { footprintHalf } from './engine.js';
 import { POINTS, TIME } from './rules.js';
 
 // Which level a ROBOT aims when it has a CORAL, best points first. The order is the shipped greedy
@@ -66,6 +65,22 @@ export function greedyPolicy(side, opts = {}) {
     // the A/B reads: a defender takes a machine out of the fleet's cycle count, and what it gets back is the
     // opponent's tempo, which this engine can only charge for by driving into them.
     defendSlots: opts.defendSlots ?? null,
+    // Whether a machine presses instead of taking the worst fetch on the menu. This is the 2026 build's
+    // idle-press rung ported here and priced: there, a ROBOT that cannot shoot, sweep or pass shadows their
+    // scorer rather than idling, and the target is chosen from an opponent-threat score instead of assigned
+    // from the page. Here the press competes with the fetch on seconds-per-point (see `pressTakePerSec`), so
+    // it can only win time the fleet was already spending badly — which is what makes it different from
+    // `defendSlots`, a duty that gives up real cycles for a play effect that `npm run measure` reads as a wash
+    // (−5.8 ± 1.4 of its own total against −1.0 ± 1.8 off the opponent's play, 48 paired seeds).
+    // `false` is the shipped behaviour: the cheapest piece always wins.
+    autoDefend: opts.autoDefend ?? false,
+    // What one second of press is worth, in points off the opponent. The planner's pin (`ai.js`) is 0.08 and
+    // this default is the higher end of what the duty arm leaves room for: `npm run measure`'s paired arms say a
+    // pressed machine takes 1.0 points off the opponent's PLAY over the 25.0 s it spends in the ring, which is
+    // about 0.04 a press-second before the fouls it donates, and the same arm's margin is −27.08 once those are
+    // counted, because a defender hands over 31.7 and 27.2 foul points a MATCH. Nothing measured here supports a
+    // price above a few tenths; the low value is what keeps the press in the idle tail the cutoff hands back.
+    pressTakePerSec: opts.pressTakePerSec ?? 0.26,
     // `noAlgae` is not a strategy, it is the price of the ALGAE work measured against the CORAL it displaces:
     // a fleet that never strips tells you what the ALGAE column was worth in cycle time.
     noAlgae: opts.noAlgae ?? false,
@@ -85,18 +100,18 @@ export function greedyPolicy(side, opts = {}) {
     // and it is what made a held press cost 30 MAJOR FOULs a MATCH.
     defendResetSec: opts.defendResetSec ?? 6,
     // How many seconds of drive a machine will NOT pay to avoid a CORAL STATION pocket a teammate is already
-    // bound for. The crowd is real and the engine's own counter books it: 27.0% of a fleet's 65.4 CORAL picks a
-    // MATCH start with a teammate on the same corner, and pricing the crowd takes that to 17.7%. What the crowd
+    // bound for. The crowd is real and the engine's own counter books it: 27.5% of a fleet's 58.7 CORAL picks a
+    // MATCH start with a teammate on the same corner, and pricing the crowd takes that to 15.1%. What the crowd
     // COSTS did not survive the NET lift — this constant used to ship on a pick-to-pick gap of 7.29 ± 0.21 s
     // contested against 6.27 ± 0.10 s alone, and on the shipped profiles that has inverted to 4.34 ± 0.18 s
     // against 6.83 ± 0.11 s (n=257 against 2,703), because a machine that rejoins the corner its fleet never
     // left has a short drive. So it is a confound, not a wait, and the value is set from the arm the planner
-    // decides against instead: one side spreading, the other on the shipped bid, +1.1 ± 2.0 own points over 24
+    // decides against instead: one side spreading, the other on the shipped bid, +3.3 ± 2.0 own points over 24
     // paired held-out seeds (guard 27). The bid converts the seconds through this machine's own
     // speed, which makes it a trade in time rather than in inches: a fast machine walks farther off the queue
     // than a slow one. 0.91 is the value the planner's arm measures at, and `npm run headroom` sweeps it rather
-    // than defending it — 0.45/0.91/1.6 s read +2.3/−0.9/+0.7 and +4.5/+1.5/+2.6 on the two seed bases, all of
-    // it inside the error bar. `0` is the shipped behaviour — nearest corner, whoever is
+    // than defending it — 0.45/0.91/1.6 s read +2.6/+4.7/+5.7 and +2.8/−0.4/+1.1 on the two seed bases, and only
+    // the 9000 base clears its bar. `0` is the shipped behaviour — nearest corner, whoever is
     // standing at it — and the planner turns this on where `fastsim.js` prices it.
     stationSpread: opts.stationSpread ?? 0,
     // Time sense. A cycle that cannot finish before the whistle is not a cycle — it is a CORAL left in the
@@ -122,6 +137,29 @@ export function greedyPolicy(side, opts = {}) {
     // seconds off a cycle, applied to the two piece sources; `0` is the shipped behaviour and the arm the
     // measurement below decides against.
     pieceSpread: opts.pieceSpread ?? 0,
+    // The AUTO routine is a SCRIPT (§6.4 — no driver input), and a scripted three-machine AUTO gives each
+    // machine its own path; it does not send all three at the same CORAL MARK. The plain bid has them all take
+    // `sources[0]`, the nearest, and the field only stages three MARKS an ALLIANCE can reach: `npm run measure`
+    // reads that as 78% of a johnson ALLIANCE's AUTO picks off those three, 17% off its own CORAL STATION, 55.7
+    // of the station's 57 CORAL still there at the whistle, and 40% of AUTO robot-seconds spent standing still.
+    // This is the TELEOP crowd price applied to the AUTO source ranking, in seconds of drive per ally already
+    // aimed at that point; the COST the budget tests stays on the true distance, so a machine that walks over
+    // to the next MARK does not also convince itself it has more time. Off here, pinned at 1.5 in `ai.js`:
+    // +0.28 ± 0.05 AUTO CORAL and about +2 AUTO points an ALLIANCE with LEAVE +0.25 ± 0.12 and 0.92 ± 0.23 extra
+    // STATION picks a MATCH, on 144 paired alliance-sides across three seed bases — and the piece TOTAL does
+    // not pay for it (-0.01 ± 0.34 on one stride, +1.07 ± 0.38 on the other). Past about 2 s the bid skips the
+    // source instead of pricing the drive, which is why the pin is 1.5 rather than 3. Guard 30 holds the pin to
+    // that reading: the price must still reach the AUTO branch, must still move picks to the STATION, must not
+    // spend LEAVE or the TELEOP count, must still leave `0` equal to the shipped MATCH, and the planner must
+    // still differ from the same planner told 0 — which is what notices the pin being dropped.
+    autoCrowdSec: opts.autoCrowdSec ?? 0,
+    // The error bar the straight-line AUTO budget keeps on top of its own estimate. It is a knob rather than a
+    // constant only so `npm run measure` can price it: at the shipped 0.4 the johnson routine lands 7.29 AUTO
+    // CORAL an ALLIANCE, taking it to 0 buys +0.21 ± 0.07 of AUTO for -0.19 ± 0.16 of the 9 LEAVE, and to −0.8
+    // buys +0.44 ± 0.08 for -0.69 ± 0.24 — so the shortfall against the recorded 9 is NOT this margin being too
+    // careful: bought at the cheapest rate it still leaves the column at 7.7. `AUTO_SLACK_SEC` is the value the
+    // replay runs.
+    autoSlackSec: opts.autoSlackSec ?? AUTO_SLACK_SEC,
   };
   const opp = side === 'blue' ? 'red' : 'blue';
   // G427 charges a MAJOR FOUL for contacting an opponent "partially or fully inside the opponent's BARGE ZONE
@@ -161,19 +199,21 @@ export function greedyPolicy(side, opts = {}) {
   };
   // The same bid on a PIECE: how many allies are already aimed at this one, converted into seconds of drive
   // for this machine. At the shipped `pieceSpread` 0 it returns 0 and the ranking below is the plain distance.
-  const crowdSec = (rb, obs, x, y) => (cfg.pieceSpread
-    ? cfg.pieceSpread * obs.allies.reduce((n, o) => n + (o.slot !== rb.slot && o.target
+  // The AUTO routine calls it with `autoCrowdSec` instead, because the two are priced separately on purpose:
+  // the TELEOP one is a duty the planner chooses, the AUTO one is what a scripted path has to look like.
+  const crowdSec = (rb, obs, x, y, factor = cfg.pieceSpread) => (factor
+    ? factor * obs.allies.reduce((n, o) => n + (o.slot !== rb.slot && o.target
       && Math.hypot(o.target.x - x, o.target.y - y) <= 45 ? 1 : 0), 0) * (rb.profile?.driveSpeedIps ?? 160)
     : 0);
   // Reaching an ALGAE on the opponent's REEF means driving past their CAGEs, and G418 charges a MAJOR FOUL
   // (6 points, plus a BARGE Ranking Point in a Qualification MATCH) to whoever is contacted there. The ledger
-  // read is what found it, and it read 8.6 points of fouls a MATCH for a three-machine duty fleet and 7.6 for
-  // one, over 48 paired seeds on two bases; the gate took that to 3.7 and 1.8 (−4.96 ± 1.35 and −5.88 ± 1.09)
-  // for 1.2 ± 1.1 and 0.4 ± 0.7 points of its own score. The NET reach then removed most of the reason to
-  // cross: `npm run verify`'s zone guard now reads the shipped fleets' crossing as 0.19 rings off the opponent
-  // a MATCH gated to 0.06 for 0.8 points of combined score, and a fleet ORDERED to strip donates 1.1 fouls
-  // against the control's 0.00 — it goes anyway (0.63 rings gated, 0.50 ungated), which is what a gate that
-  // prices rather than forbids looks like. It ships because a planner offered the duty axis cannot be allowed
+  // read is what found it: what a stripping fleet hands over is mostly CAGE and zone traffic, not the G427 the
+  // clause table points at. `npm run verify`'s zone guard reads the shipped fleets' crossing as 0.13 rings off
+  // the opponent a MATCH ungated and 0.00 gated, and the deter is free — 0.0 points of combined score — with the
+  // same fleet handing over 1.88 foul points ungated against 0.00 gated. A fleet ORDERED to strip pays 15.6 more
+  // fouls than the 0.25 rings it buys, and the control that refuses both crossings takes 0.00 rings and 0.00
+  // calls inside their REEF ZONE while its own CAGE-area traffic still costs it 5.63. So the gate moves fleets
+  // that choose, not fleets that are told. It ships because a planner offered the duty axis cannot be allowed
   // to choose it while the crossing is unpriced.
   // `[estimate]` 30 in: the ring is on the REEF's face, so a guard anywhere inside the zone plus two machine
   // lengths can be the one that gets touched while the gripper is busy. 46 is the same construction `atHome`
@@ -195,6 +235,11 @@ export function greedyPolicy(side, opts = {}) {
   const pressed = new Map();
   const pausedUntil = new Map();
   const strikes = new Map();
+  // The slots pressing on THIS tick, so an opportunistic press knows the fleet already has one across. G421
+  // makes two a MAJOR, and the seat-count ledger says the second one buys nothing anyway. Cleared on the tick
+  // because a press is re-decided every 0.2 s, not committed for a cycle.
+  const pressing = new Set();
+  let pressTick = -1;
   const pressOver = (rb, obs) => {
     const n = DEFEND_FOUL_CODES.reduce((a, c) => a + (rb.stats.fouls[c] || 0), 0);
     const prev = pressed.get(rb.slot);
@@ -209,6 +254,19 @@ export function greedyPolicy(side, opts = {}) {
     pressed.set(rb.slot, n);
     return (pausedUntil.get(rb.slot) ?? 0) > obs.t;
   };
+  // The pressable opponent, if this fleet is allowed to press right now. Ranked by what the press takes away
+  // rather than by who is nearest: a machine carrying CORAL is the one whose next placement is worth stopping,
+  // and the distance is the price paid for it — the same shape the 2026 build's threat score uses. Only the
+  // open ones count, because G427 charges for contacting a car inside its own zone whoever started it.
+  const pressFor = (rb, obs) => {
+    if (pressOver(rb, obs)) return null;
+    const rank = (o) => (o.coral >= 1 ? 0 : 40) + o.d / 40;
+    const tgt = obs.opponents.filter((o) => !o.disabled && !atHome(o, obs)).sort((a, b) => rank(a) - rank(b))[0];
+    if (!tgt) return null;
+    pressing.add(rb.slot);
+    return { mode: INTENT.DEFEND, targetRobot: tgt.slot, target: { x: tgt.x, y: tgt.y } };
+  };
+  const givenUp = (rb, lv) => (rb.stats.dropsAt ? rb.stats.dropsAt[lv] : 0) >= cfg.placeGiveUp;
   // slot -> { t, placed }: how long this ROBOT has been trying to land the CORAL it holds. `placed` is the
   // count it was measured against, so a placement clears the clock by itself.
   const held = new Map();
@@ -224,8 +282,7 @@ export function greedyPolicy(side, opts = {}) {
     // matter how many CORAL it has dropped there, which is the reason the top branch always ended full even
     // at a 60% miss rate: the retries are free to a policy that never learns. `placeGiveUp: Infinity` is the
     // control arm, and it is what `npm run measure` compares the level distribution against.
-    const givenUp = (lv) => (rb.stats.dropsAt ? rb.stats.dropsAt[lv] : 0) >= cfg.placeGiveUp;
-    const want = (lv) => obs.free[lv] > 0 && !givenUp(lv);
+    const want = (lv) => obs.free[lv] > 0 && !givenUp(rb, lv);
     return order.slice(drop).find(want) || order.find(want) || order.find((lv) => obs.free[lv] > 0);
   };
   // A banded ROBOT only counts the levels it was given as room: with a division of labour, "the REEF is
@@ -235,7 +292,7 @@ export function greedyPolicy(side, opts = {}) {
   // The level list this machine works, in one place: `placeLevel`, `bandFree` and the endgame budget below all
   // have to read the same order, or the budget prices a level the machine will not aim.
   const orderFor = (rb) => (cfg.bands ? cfg.bands[rb.slot] ?? cfg.placeOrder : cfg.placeOrder);
-  const wantLevel = (rb, obs) => orderFor(rb).find((lv) => obs.free[lv] > 0 && (rb.stats.dropsAt ? rb.stats.dropsAt[lv] : 0) < cfg.placeGiveUp);
+  const wantLevel = (rb, obs) => orderFor(rb).find((lv) => obs.free[lv] > 0 && !givenUp(rb, lv));
   // The endgame legs, priced with the engine's own geometry so the policy and the sim do not drift apart:
   // a PLACE drives to `reefZone.apothem - 6` from the REEF CENTRE (engine.js, the PLACE move) and a CLIMB
   // drives to the CAGE then pays `climbSec`, plus the 1.2 s the engine adds for a DEEP pipe.
@@ -277,16 +334,19 @@ export function greedyPolicy(side, opts = {}) {
       pressed.clear();
       pausedUntil.clear();
       spendFirst.clear();
+      pressing.clear();
     },
     decide(rb, obs) {
       if (!rb.coral) held.delete(rb.slot);
       if (!rb.coral && !rb.algae) spendFirst.delete(rb.slot);
+      if (obs.t !== pressTick) { pressTick = obs.t; pressing.clear(); }
       const timeLeft = TIME.matchSec - obs.t;
       // AUTO (§6.4) has no driver input in reality — it is a pre-programmed routine — and the sim runs
       // the same policy through it. The routine a 2025 team actually scripted was two or three CORAL, not
       // one: TBA's 2025cmptx alliances averaged 9 CORAL in AUTO, 7 of them on L4 — the preload (§6.3.4.1 B)
       // plus a pick off a CORAL MARK (§6.3.4.1 A: six of them are on the carpet, and taking them in AUTO is
-      // legal) and a second placement, then the cross of the starting line for LEAVE (§6.5.2).
+      // legal) and a second placement. LEAVE (§6.5.2) comes with the first metre of that path, because G303-D
+      // starts the machine straddling the line the routine is measured from.
       if (obs.period === 'AUTO') {
         const autoFree = obs.free.L1 + obs.free.L2 + obs.free.L3 + obs.free.L4;
         if (rb.coral >= 1) {
@@ -296,33 +356,42 @@ export function greedyPolicy(side, opts = {}) {
         // How many CORAL the scripted AUTO routine attempts is a ROBOT property, not a driver choice:
         // `autoCycles` is what a team programmed (§6.4 — no driver input in AUTO). The whole field only stages
         // 6 CORAL MARKS, 3 per ALLIANCE (manual §5 definitions, §6.3.4.1 A), so the preload plus its own 3
-        // marks is a 6-CORAL ceiling — and TBA's 2025cmptx alliances averaged 9 in AUTO. The extra pieces
-        // come off the CORAL STATION, which the HUMAN PLAYERS are already feeding at the whistle, so a real
-        // auto routine treats the station as a source too.
+        // marks is a 6-CORAL ceiling. The recorded AUTO columns sit above it: `2025cmptx_f1m1` has 9 CORAL in
+        // AUTO for EACH alliance and the ledger arithmetic closes only if all nine are on L4 (9 x 7 = 63 of
+        // Johnson's 295), and the nine elite teams read off the Statbotics 2025 export average `auto_coral`
+        // 1.55-4.19 a ROBOT (mean 2.93, so 8.8 an ALLIANCE). The extra pieces come off the CORAL STATION,
+        // which the HUMAN PLAYERS are already feeding at the whistle (G433-A lets the CORAL in through the
+        // STATION and bars nobody at the AUTO whistle), so a real auto routine treats the station as a source.
         const p = rb.profile;
-        const reef = obs.geo[obs.side].reef;
         const lineX = obs.geo[obs.side].startingLineX;
         // The budget test is what keeps the routine honest: the ROBOT has to drive to the source, take one,
-        // come back and place it, and then still be across the starting line when AUTO ends, because that is
-        // when LEAVE is scored (§6.5.2). The cross is the last leg of the scripted path, not an afterthought;
-        // leaving it out is what stranded 53 of 288 ROBOTS inside the REEF ZONE at the whistle for 7.3 of the
-        // 9 LEAVE points a 2025cmptx alliance took (their per-ROBOT auto-leave rate was 97.7-100%, TBA team
-        // pages). The distance is from the branch stand-off to the line plus the 30 in footprint that has to
-        // clear it, and the estimate needs slack because a straight-line model does not see the turn.
-        const crossSec = travelSec(Math.abs(lineX - reef.x) - reef.apothem - 16 + footprintHalf(rb), p) + 0.4;
+        // come back and place it, and still have LEFT when AUTO ends, because that is when §6.5.2 scores it.
+        // LEAVE is no longer a leg of that path. G303-D stages the ROBOT straddling its starting line, and
+        // every source below is on the ALLIANCE-WALL side of it, so the first 15 in of the drive out clears
+        // it and the 15 s is all cycle. Reserving the round trip was right for the build that started the
+        // fleet 48 in on the wrong side of the line — it is what recovered 7.3 → 9 LEAVE points, against the
+        // 97.7-100% per-ROBOT auto-leave rate the 2025cmptx TBA pages show — and it became a cycle spent
+        // buying a point for nothing the moment #123 put the CORAL MARKs behind the REEF.
         const placed = LEVELS.reduce((a, lv) => a + rb.stats.placed[lv], 0);
+        // Ranked with the crowd price, costed without it: two allies driving at the same MARK is a path a
+        // script would never contain, and the fix is to send one of them somewhere else — the next MARK or
+        // the STATION. The seconds the routine budgets for the leg stay the true distance, because the
+        // machine really does drive that far either way.
         const sources = [
-          ...obs.coralOnFloor.slice(0, 2).map((c) => ({ x: c.x, y: c.y, d: c.d, piece: c.ref })),
-          ...obs.stations.filter((s) => s.remaining > 0).map((s) => ({ x: s.x, y: s.y, d: s.d, stationIdx: s.i })),
+          ...obs.coralOnFloor.slice(0, 2).map((c) => ({ x: c.x, y: c.y, d: c.d + crowdSec(rb, obs, c.x, c.y, cfg.autoCrowdSec), raw: c.d, piece: c.ref })),
+          ...obs.stations.filter((s) => s.remaining > 0)
+            .map((s) => ({ x: s.x, y: s.y, d: s.d + crowdSec(rb, obs, s.x, s.y, cfg.autoCrowdSec), raw: s.d, stationIdx: s.i })),
         ].sort((a, b) => a.d - b.d);
         const src = sources[0];
-        const cost = src ? 2 * travelSec(src.d, p) + p.pickSec + p.placeSec.L4 + crossSec + AUTO_SLACK_SEC : Infinity;
+        const cost = src ? 2 * travelSec(src.raw, p) + p.pickSec + p.placeSec.L4 + cfg.autoSlackSec : Infinity;
         // `autoCycles` is the number of CORAL the routine spends, counting the preload, so the fetch is open
         // while placements so far are under it.
         if (placed < (p.autoCycles ?? 1) && autoFree > 0 && cost < TIME.autoSec - obs.t) {
           return { mode: INTENT.FETCH_CORAL, target: { x: src.x, y: src.y }, piece: src.piece, stationIdx: src.stationIdx };
         }
-        if (!rb.left) return { mode: INTENT.IDLE, target: { x: lineX + (obs.side === 'blue' ? 30 : -30), y: rb.y } };
+        // Nothing fits in the 15 s: clear the line by backing toward the ALLIANCE WALL, which is where a
+        // machine with no AUTO job belongs, rather than driving into the BARGE to do it.
+        if (!rb.left) return { mode: INTENT.IDLE, target: { x: lineX - (obs.side === 'blue' ? 30 : -30), y: rb.y } };
         return { mode: INTENT.IDLE };
       }
       // The endgame belongs to the CAGES: BARGE points are worth 6-12 each and a 16-point BARGE RP. The window
@@ -381,10 +450,11 @@ export function greedyPolicy(side, opts = {}) {
         // Only an opponent OUT in the open is a pressable target. G427 charges a MAJOR FOUL for contacting a
         // machine inside its own REEF ZONE or BARGE ZONE whoever initiated it, so pressing one at home is not
         // a defence, it is a 6-point donation every time the two touch — which is why 2025 defense happened in
-        // the corridors and the press breaks off the moment the opponent gets home.
-        const rank = (o) => (o.coral >= 1 ? 0 : 40) + o.d / 40;
-        const target = pressOver(rb, obs) ? null : obs.opponents.filter((o) => !o.disabled && !atHome(o, obs)).sort((a, b) => rank(a) - rank(b))[0];
-        if (target) return { mode: INTENT.DEFEND, targetRobot: target.slot, target: { x: target.x, y: target.y } };
+        // the corridors and the press breaks off the moment the opponent gets home. A DUTY seat presses
+        // whatever the fleet's other seats are doing, because it was told to; the one-presser rule below is
+        // only for a press the machine chooses itself.
+        const press = pressFor(rb, obs);
+        if (press) return press;
       }
       // Nothing held: pick the cheapest scoring opportunity. A branch is worth 3-5 TELEOP points. An ALGAE
       // is worth 6 in the processor but not 6 of MARGIN: the same piece then lands in the opponent's
@@ -409,24 +479,42 @@ export function greedyPolicy(side, opts = {}) {
       }
       const options = [];
       if (reefFree > 0) {
-        if (coral && fits(coralCycle(coral, coral.d))) options.push({ mode: INTENT.FETCH_CORAL, d: coral.d + crowdSec(rb, obs, coral.x, coral.y), value: 4, target: { x: coral.x, y: coral.y }, piece: coral.ref });
-        if (station && fits(coralCycle(station, station.d))) options.push({ mode: INTENT.FETCH_CORAL, d: ownBid.d + 12, value: 4, target: { x: station.x, y: station.y }, stationIdx: station.i, stationSide: obs.side });
+        if (coral && fits(coralCycle(coral, coral.d))) options.push({ mode: INTENT.FETCH_CORAL, d: coral.d + crowdSec(rb, obs, coral.x, coral.y), cyc: coralCycle(coral, coral.d), value: 4, target: { x: coral.x, y: coral.y }, piece: coral.ref });
+        if (station && fits(coralCycle(station, station.d))) options.push({ mode: INTENT.FETCH_CORAL, d: ownBid.d + 12, cyc: coralCycle(station, station.d), value: 4, target: { x: station.x, y: station.y }, stationIdx: station.i, stationSide: obs.side });
         // §6.3.4.1 C puts 57-60 CORAL behind each ALLIANCE's two STATIONs and no clause reserves them to
         // their own side, so their queue is a source: the same 4 points, one fewer CORAL they will place, and
         // the whole length of the FIELD to pay for it. `d` is measured from where this machine stands, which
         // is what makes the crossing price itself — and only one ROBOT of the three can be over there, per
         // G421.
         const stolen = cfg.coralTheft ? stationBid(rb, obs, obs.enemyStations?.filter((s) => s.remaining > 0) || []) : null;
-        if (stolen && fits(coralCycle(stolen.s, stolen.s.d))) options.push({ mode: INTENT.FETCH_CORAL, d: stolen.d + 12, value: 4, target: { x: stolen.s.x, y: stolen.s.y }, stationIdx: stolen.s.i, stationSide: opp });
+        if (stolen && fits(coralCycle(stolen.s, stolen.s.d))) options.push({ mode: INTENT.FETCH_CORAL, d: stolen.d + 12, cyc: coralCycle(stolen.s, stolen.s.d), value: 4, target: { x: stolen.s.x, y: stolen.s.y }, stationIdx: stolen.s.i, stationSide: opp });
       }
       const algaeValue = Math.max(1, obs.algaeMarginValue ?? POINTS.algae.processor[1]);
       if (!cfg.noAlgae && algae && algaePool(obs) > 0 && fits(algaeCycle(algae, algae.d))) {
-        options.push({ mode: INTENT.STRIP_ALGAE, d: algae.d + crowdSec(rb, obs, algae.x, algae.y), value: algaeValue, target: { x: algae.x, y: algae.y }, piece: algae.ref });
+        options.push({ mode: INTENT.STRIP_ALGAE, d: algae.d + crowdSec(rb, obs, algae.x, algae.y), cyc: algaeCycle(algae, algae.d), value: algaeValue, target: { x: algae.x, y: algae.y }, piece: algae.ref });
       }
-      if (!options.length) return { mode: INTENT.IDLE, target: { x: obs.geo[obs.side].bargeZone.x, y: obs.geo[obs.side].bargeZone.y } };
+      // A second with nothing to buy is a second the opponent can spend for you. This is where the clock gate
+      // leaves its leftovers: a machine whose round trip no longer fits, or whose REEF has nothing left at a
+      // level it will still aim, comes here instead of driving home empty. Only one of the three does it, and
+      // only when nobody was already told to.
+      if (!options.length) {
+        if (cfg.autoDefend && !pressing.size) {
+          const press = pressFor(rb, obs);
+          if (press) return press;
+        }
+        return { mode: INTENT.IDLE, target: { x: obs.geo[obs.side].bargeZone.x, y: obs.geo[obs.side].bargeZone.y } };
+      }
       // Cheapest per point of value, with a small penalty for crossing the whole field.
       options.sort((a, b) => a.d / a.value - b.d / b.value);
       const pick = options[0];
+      // The press has to beat the fetch it replaces in the one currency the fetch is already priced in:
+      // WHOLE-CYCLE seconds per point, because a press is an open-ended job and a cycle is not. `cyc` is the
+      // same straight-line budget `cycleCutoffSec` gates on, so the two rules read one number.
+      if (cfg.autoDefend && !pressing.size
+        && pick.cyc / pick.value > 1 / cfg.pressTakePerSec) {
+        const press = pressFor(rb, obs);
+        if (press) return press;
+      }
       return pick.mode === INTENT.FETCH_CORAL ? { mode: INTENT.FETCH_CORAL, target: pick.target, piece: pick.piece, stationIdx: pick.stationIdx, stationSide: pick.stationSide } : { mode: INTENT.STRIP_ALGAE, target: pick.target, piece: pick.piece };
     },
   };

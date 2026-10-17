@@ -4,7 +4,8 @@
 // so a difference here is the setting under test and not a ROBOT comparison.
 
 import { playMatch, evaluate } from '../web/js/league.js';
-import { SAMPLES, HUMAN_PLAYER } from '../web/js/model.js';
+import { SAMPLES, PRESETS, HUMAN_PLAYER, layout } from '../web/js/model.js';
+import { reefPenetration } from '../web/js/engine.js';
 import { POINTS } from '../web/js/rules.js';
 
 const N = 24;
@@ -94,8 +95,68 @@ for (const sec of [null, 1.2, 1.9]) {
   console.log(`${`${sec === null ? 'blue as shipped' : 'blue reach ' + sec}, red none`.padEnd(30)} blue ${(e.avgBlue.toFixed(1) + ' ± ' + e.blueSe.toFixed(1)).padEnd(12)} red ${(e.avgRed.toFixed(1) + ' ± ' + e.redSe.toFixed(1)).padEnd(12)} margin ${(e.avgMargin.toFixed(1) + ' ± ' + e.marginSe.toFixed(1)).padEnd(12)} paired margin shift vs neither ${(mu >= 0 ? '+' : '') + mu.toFixed(1)} ± ${se.toFixed(1)}`);
 }
 
-label(`AUTO cycle budget: the generic trio, n=${N} mirror MATCHes (seedBase ${seedBase})`);
-// §6.4 gives AUTO 15 s and §6.5.2 judges LEAVE at the AUTO->TELEOP boundary, so the extra cycle is bought
+label(`the NET's two changes (lanes + a ceiling), paired n=${N} mirror MATCHes on both seed bases`);
+// #117. `netLaneSpread: false` puts every stand-off back at the middle of the 12 ft face — the engine the
+// replay was made before — and `netCapacity: 18` takes the ceiling off the mesh, because §6.5.1 caps nothing
+// and the 9 is geometry (three 16 in rings along each 48 in lane, §5.4.2 + §5.7.2). They are priced apart
+// because they are two claims: one about traffic, one about a resource that runs out.
+const netArm = (sb, over) => {
+  const rows = [];
+  for (let i = 0; i < N; i++) {
+    const m = playMatch({ seed: sb + i * 977, rosterIdx: i, scenarioOverride: over, blueProfiles: SAMPLES, redProfiles: SAMPLES });
+    rows.push({
+      sum: m.final.blue.total + m.final.red.total,
+      net: m.final.blue.algae.net + m.final.red.algae.net,
+      proc: m.final.blue.algae.processor + m.final.red.algae.processor,
+      unstick: m.events.filter((e) => e.kind === 'unstick').length,
+    });
+  }
+  return rows;
+};
+const netMean = (rs, k) => rs.reduce((a, r) => a + r[k], 0) / rs.length;
+const netDelta = (a, b, k) => {
+  const d = a.map((r, i) => b[i][k] - r[k]);
+  const m = d.reduce((s, v) => s + v, 0) / N;
+  const se = Math.sqrt(d.reduce((s, v) => s + (v - m) ** 2, 0) / (N - 1) / N);
+  return `${(m >= 0 ? '+' : '') + m.toFixed(2)} ± ${se.toFixed(2)} (${d.filter((v) => v !== 0).length}/${N} differ)`;
+};
+const NET_LANES_OFF = { netLaneSpread: false, netCapacity: 18 };
+for (const sb of [9000, 21000]) {
+  const A = netArm(sb, NET_LANES_OFF); // the engine before #117
+  const B = netArm(sb, { netCapacity: 18 }); // lanes only
+  const C = netArm(sb, { netLaneSpread: false }); // ceiling only
+  const D = netArm(sb, {}); // shipped
+  console.log(`  seed base ${sb}: A one point/18 rings sum ${netMean(A, 'sum').toFixed(1)} NET ${netMean(A, 'net').toFixed(2)} PROC ${netMean(A, 'proc').toFixed(2)} unstick ${netMean(A, 'unstick').toFixed(1)}`);
+  console.log(`             B lanes/18     sum ${netMean(B, 'sum').toFixed(1)} NET ${netMean(B, 'net').toFixed(2)} PROC ${netMean(B, 'proc').toFixed(2)} unstick ${netMean(B, 'unstick').toFixed(1)}`);
+  console.log(`             C one point/9   sum ${netMean(C, 'sum').toFixed(1)} NET ${netMean(C, 'net').toFixed(2)} PROC ${netMean(C, 'proc').toFixed(2)} unstick ${netMean(C, 'unstick').toFixed(1)}`);
+  console.log(`             D shipped       sum ${netMean(D, 'sum').toFixed(1)} NET ${netMean(D, 'net').toFixed(2)} PROC ${netMean(D, 'proc').toFixed(2)} unstick ${netMean(D, 'unstick').toFixed(1)}`);
+  console.log(`    lanes alone  B-A: sum ${netDelta(A, B, 'sum')} | NET ${netDelta(A, B, 'net')} | PROC ${netDelta(A, B, 'proc')} | unstick ${netDelta(A, B, 'unstick')}`);
+  console.log(`    ceiling alone C-A: sum ${netDelta(A, C, 'sum')} | NET ${netDelta(A, C, 'net')} | PROC ${netDelta(A, C, 'proc')}`);
+  console.log(`    both together D-A: sum ${netDelta(A, D, 'sum')} | NET ${netDelta(A, D, 'net')} | PROC ${netDelta(A, D, 'proc')} | unstick ${netDelta(A, D, 'unstick')}`);
+}
+// The one-sided reach arm reversed sign under the ceiling, so it is printed on both settings of it: the
+// alliance that lifts its own rings can no longer spend more than nine of them there.
+label(`one side has the lift and the other does not: what the ceiling does to that arm (n=${N})`);
+for (const cap of [18, 9]) {
+  for (const sb of [9000, 21000]) {
+    const d = [];
+    for (let i = 0; i < N; i++) {
+      const seed = sb + i * 977;
+      const m = playMatch({
+        seed,
+        rosterIdx: i,
+        scenarioOverride: { netCapacity: cap },
+        blueProfiles: SAMPLES,
+        redProfiles: SAMPLES.map((p) => ({ ...p, netScoreSec: 0 })),
+      });
+      d.push(m.final.blue.total - m.final.red.total);
+    }
+    const mean = d.reduce((a, b) => a + b, 0) / N;
+    const se = Math.sqrt(d.reduce((s, v) => s + (v - mean) ** 2, 0) / (N - 1) / N);
+    console.log(`  netCapacity ${cap}, seed base ${sb}: margin ${(mean >= 0 ? '+' : '') + mean.toFixed(1)} ± ${se.toFixed(1)} for the lifting alliance`);
+  }
+}
+label(`AUTO cycle budget: the generic trio, n=${N} mirror MATCHes (seedBase ${seedBase})`);// §6.4 gives AUTO 15 s and §6.5.2 judges LEAVE at the AUTO->TELEOP boundary, so the extra cycle is bought
 // with the line crossing. `autoCycles` is a scripted-routine assumption rather than anything in the manual,
 // which is why its price is printed next to the rules that bound it.
 for (const cyc of [1, 2, 3]) {
@@ -229,3 +290,340 @@ console.log(`${'no opponent-REEF ALGAE'.padEnd(26)} ${denyArm({ enemyAlgae: fals
 // CORAL STATIONs are each ALLIANCE's own furniture. What it moves is this fleet's cycle time, so the second
 // column is expected to read about zero and the first is the whole result.
 console.log(`${'station spread 0.91 s'.padEnd(26)} ${denyArm({ stationSpread: 0.91 })}`);
+label('the press per second of ring held');
+// `policy.js` prices a press the way a drive team does: what does one second of shadowing buy over the second
+// of cycling it costs? So the denominator is the seconds the machine actually spent in the ring (the engine's
+// own `defendSec`), not the MATCH, and the numerator is the scoreline MARGIN on the TOTALS — a foul the
+// defender donates is points the other alliance really gets, and hiding them in a "play" column is how a press
+// that loses matches came to look like one that wins.
+{
+  const d = [];
+  const sec = [];
+  for (const sb of [9000, 21000]) {
+    for (let i = 0; i < N; i++) {
+      const seed = sb + i * 977;
+      const a = playMatch({ seed });
+      const b = playMatch({ seed, bluePolicyOpts: { defendSlots: [2] } });
+      const held = (m) => m.final.blue.robots.reduce((s, r) => s + r.defend, 0);
+      sec.push(held(b) - held(a));
+      d.push((b.final.blue.total - b.final.red.total) - (a.final.blue.total - a.final.red.total));
+    }
+  }
+  const m = d.reduce((x, y) => x + y, 0) / d.length;
+  const se = Math.sqrt(d.reduce((s, x) => s + (x - m) ** 2, 0) / (d.length - 1) / d.length);
+  const ps = sec.reduce((x, y) => x + y, 0) / sec.length;
+  console.log(`${'one seat in the ring'.padEnd(26)} margin ${m >= 0 ? '+' : ''}${m.toFixed(2)} ± ${se.toFixed(2)} `
+    + `over ${ps.toFixed(1)} s a MATCH of ring = ${(m / (ps || 1)).toFixed(3)} a press-second`);
+}
+
+label(`the planner's budget pins: planner against the same planner with the rules off (n=${N * 2}, 24 on each base)`);
+// Four of the planner's pins have no equivalent in the baseline — a cycle has to have clock left before it is
+// started, the hopper is emptied before a climb, a piece a teammate is bound for is not chased, and its AUTO
+// routine does not send three machines at the same CORAL MARK. A fifth (a press priced per second) is measured
+// in the DEFEND arm above. Per column, because "the total went up" does not say whether the climb was bought by
+// parking machines.
+{
+  const seeds = [];
+  for (const sb of [9000, 21000]) for (let i = 0; i < N; i++) seeds.push(sb + i * 977);
+  const noPins = { cycleCutoffSec: 0, spendBeforeClimb: false, pieceSpread: 0, autoCrowdSec: 0 };
+  const cols = (m) => ({
+    total: m.final.blue.total + m.final.red.total,
+    coral: m.final.blue.coralPoints + m.final.red.coralPoints,
+    algae: m.final.blue.algaePoints + m.final.red.algaePoints,
+    barge: m.final.blue.bargePoints + m.final.red.bargePoints,
+    deep: m.final.blue.barge.deep + m.final.red.barge.deep,
+    shallow: m.final.blue.barge.shallow + m.final.red.barge.shallow,
+    park: m.final.blue.barge.park + m.final.red.barge.park,
+    leave: m.final.blue.leave + m.final.red.leave,
+    autoCoral: m.final.blue.autoCoral + m.final.red.autoCoral,
+  });
+  const run = (opts) => seeds.map((seed) => cols(playMatch({ blueKind: 'ai', redKind: 'ai', seed, bluePolicyOpts: opts, redPolicyOpts: opts })));
+  const on = run({});
+  const off = run(noPins);
+  const mean = (rows, k) => rows.reduce((s, c) => s + c[k], 0) / rows.length;
+  const diff = (k) => {
+    const d = mean(on, k) - mean(off, k);
+    return `${k} ${(d >= 0 ? '+' : '') + d.toFixed(2)}`;
+  };
+  console.log(`${'pins on minus off'.padEnd(26)} ${['total', 'coral', 'algae', 'barge', 'deep', 'shallow', 'park', 'leave', 'autoCoral'].map(diff).join(' ')}`);
+  // A switch that silently stopped reaching the policy reads exactly like a pin worth nothing.
+  if (Math.abs(mean(on, 'total') - mean(off, 'total')) < 1) console.log('  !! the pins did not move the planner — the four switches are not reaching policy.js');
+}
+
+label(`AUTO supply, and what the routine does with the seconds it has (n=${N} mirror MATCHes, both seats)`);
+// The AUTO column is the one the 2025cmptx_f1m1 ledger puts at 9 CORAL an ALLIANCE (all of them on L4, because
+// 9 x 7 = 63 is what its AUTO row has to be for 295 to add up) and the fleet here lands 7.29 for the named
+// preset and 6.25 for the generic trio. Four explanations were tested; three died here — the scripted
+// `autoCycles` pin, the straight-line budget's own conservatism, and the per-team `auto_coral` rounding the preset
+// file could have used instead of the alliance split — and the fourth, de-conflicting the three machines off one
+// CORAL MARK, is what the planner pins at 1.5 s (guard 30).
+// What is left is the clock — an ALLIANCE can reach 3 preloads plus its 3 CORAL MARKS without leaving its own
+// half, and the ninth piece has to come off a CORAL STATION pocket ~190 in away at the corner where the
+// ALLIANCE WALL meets the guardrail, which the budget test says does not fit with the cross of the line in it.
+{
+  const LVS = ['L1', 'L2', 'L3', 'L4'];
+  const autoOf = (f) => LVS.reduce((a, lv) => a + f.coral[lv].auto, 0);
+  const ptsOf = (f) => LVS.reduce((a, lv) => a + f.coral[lv].auto * POINTS.coral[lv][0], 0);
+  const seeds = [];
+  for (let i = 0; i < N; i++) seeds.push(seedBase + i * 977);
+  // (1) Is `REF_CORAL_PER_ROBOT` the base machine's real throughput? The named presets are built by scaling
+  // SAMPLES[0] by REF / (that team's CORAL column), so if REF is not what the unscaled machine actually scores
+  // the whole named file is systematically slow.
+  const baseThree = [SAMPLES[0], SAMPLES[0], SAMPLES[0]];
+  let baseCoral = 0;
+  for (const seed of seeds) {
+    const m = playMatch({ seed, blueProfiles: baseThree, redProfiles: baseThree });
+    for (const side of ['blue', 'red']) baseCoral += LVS.reduce((x, lv) => x + m.final[side].coral[lv].auto + m.final[side].coral[lv].tele, 0);
+  }
+  const baseRobot = baseCoral / (seeds.length * 2) / 3;
+  console.log(`  base machine (SAMPLES[0] three-up): ${baseRobot.toFixed(2)} CORAL a ROBOT a MATCH, which is what`
+    + ` REF_CORAL_PER_ROBOT claims (16.5) — the named file is fitted against that, so a wrong claim here would make`
+    + ` every named machine systematically slow`);
+  if (Math.abs(baseRobot - 16.5) > 3) console.log(`  !! the base machine scores ${baseRobot.toFixed(2)}, not 16.5 — REF_CORAL_PER_ROBOT needs refitting`);
+  // (2) Where the AUTO pieces come from, and how much of the 15 s the routine leaves unused. The rows are read
+  // after the arms below, so the closing paragraph quotes the same batch rather than a copy of an old one.
+  const supply = (name, profiles) => {
+    const pick = { mark: 0, station: 0, loose: 0 };
+    let idle = 0; let ticks = 0; let sides = 0; let stationLeft = 0; let auto = 0;
+    for (const seed of seeds) {
+      const m = playMatch({ seed, blueProfiles: profiles, redProfiles: profiles, record: true });
+      // The floor record carries ALGAE too, and §6.3.4.2 stages six of them on the same MARKS the CORAL sit on;
+      // without the kind filter a CORAL pick beside an ALGAE mark reads as a MARK pick.
+      const marks = m.frames[0].floor.filter((f) => f.side === 'blue' && f.kind === 'coral').map((f) => [f.x, f.y]);
+      const held = {}; const aiming = {};
+      for (const fr of m.frames) {
+        if (fr.t >= 15) break;
+        for (const r of fr.robots) {
+          if (r.side !== 'blue') continue;
+          ticks += 1;
+          if (!r.busy && (r.intent === 'idle' || !r.intent)) idle += 1;
+          // A recorded frame carries its target as a `[x, y]` pair, not an object.
+          if (r.busy === 'fetch-coral' && r.target) aiming[r.slot] = [r.target[0], r.target[1]];
+          const had = held[r.slot] ?? 0;
+          if (r.coral > had) {
+            const [tx, ty] = aiming[r.slot] ?? [r.x, r.y];
+            // The MARK test has to come first: #123 put the marks 38 in off the ALLIANCE WALL, inside the x
+            // band this used to reserve for the STATION corners, and the fleet's AUTO picks all read as
+            // station picks.
+            if (marks.some(([x, y]) => Math.hypot(x - tx, y - ty) < 12)) pick.mark += 1;
+            else if (tx < 60) pick.station += 1;
+            else pick.loose += 1;
+          }
+          held[r.slot] = r.coral;
+        }
+        if (fr.t > 14.7) { stationLeft += fr.stations.blue.reduce((a, b) => a + b, 0); sides += 1; }
+      }
+      auto += autoOf(m.final.blue);
+    }
+    const n = pick.mark + pick.station + pick.loose;
+    console.log(`  ${name.padEnd(14)} AUTO ${(auto / seeds.length).toFixed(2)} an ALLIANCE · AUTO picks: ${(pick.mark / N).toFixed(2)} at a MARK`
+      + ` (${(100 * pick.mark / n).toFixed(0)}%), ${(pick.station / N).toFixed(2)} at its own STATION (${(100 * pick.station / n).toFixed(0)}%),`
+      + ` ${(pick.loose / N).toFixed(2)} re-picked loose (${(100 * pick.loose / n).toFixed(0)}%)`
+      + ` · idle ${(100 * idle / ticks).toFixed(0)}% of AUTO robot-seconds`
+      + ` · ${(stationLeft / sides).toFixed(1)} of the station's 57 CORAL still there at the whistle`);
+    return { auto: auto / seeds.length, loosePct: 100 * pick.loose / n, idlePct: 100 * idle / ticks, stationLeft: stationLeft / sides };
+  };
+  // (3) The arms that decide whether the shortfall is a decision or a drive. Each row is the same 24 seeds run
+  // twice, both seats, so the error bar is the paired difference and not the seed-to-seed spread. TELEOP is on
+  // every row because the question is not whether an arm moves the AUTO column but what it moves it out of.
+  const paired = (label, profA, profB = profA, optsA = {}, optsB = {}) => {
+    const d = { auto: [], autoPts: [], leave: [], tele: [], coral: [], total: [] };
+    for (const seed of seeds) {
+      const a = playMatch({ seed, blueProfiles: profA, redProfiles: profA, bluePolicyOpts: optsA, redPolicyOpts: optsA });
+      const b = playMatch({ seed, blueProfiles: profB, redProfiles: profB, bluePolicyOpts: optsB, redPolicyOpts: optsB });
+      for (const side of ['blue', 'red']) {
+        d.auto.push(autoOf(a.final[side]) - autoOf(b.final[side]));
+        d.autoPts.push(ptsOf(a.final[side]) - ptsOf(b.final[side]));
+        d.leave.push(a.final[side].leave - b.final[side].leave);
+        d.total.push(a.final[side].total - b.final[side].total);
+        d.tele.push(LVS.reduce((x, lv) => x + a.final[side].coral[lv].tele, 0)
+          - LVS.reduce((x, lv) => x + b.final[side].coral[lv].tele, 0));
+        d.coral.push(LVS.reduce((x, lv) => x + a.final[side].coral[lv].auto + a.final[side].coral[lv].tele, 0)
+          - LVS.reduce((x, lv) => x + b.final[side].coral[lv].auto + b.final[side].coral[lv].tele, 0));
+      }
+    }
+    const stat = (k) => {
+      const m = d[k].reduce((x, y) => x + y, 0) / d[k].length;
+      const se = Math.sqrt(d[k].reduce((s, v) => s + (v - m) ** 2, 0) / (d[k].length - 1) / d[k].length);
+      return { m, se, s: `${(m >= 0 ? '+' : '') + m.toFixed(2)} ± ${se.toFixed(2)}` };
+    };
+    const st = (k) => `${k} ${stat(k).s}`;
+    console.log(`  ${label.padEnd(34)} ${['auto', 'autoPts', 'tele', 'coral', 'leave', 'total'].map(st).join(' · ')}`);
+    return Object.fromEntries(['auto', 'autoPts', 'tele', 'coral', 'leave', 'total'].map((k) => [k, stat(k)]));
+  };
+  const john = PRESETS.find((p) => p.key === 'johnson').trio;
+  const repin = (trio, pins) => trio.map((p, i) => ({ ...p, placeSec: { ...p.placeSec }, autoCycles: pins[i] }));
+  const pCrowd = paired('AUTO de-conflict 1.5 s', john, john, { autoCrowdSec: 1.5 });
+  const pCrowdGeneric = paired('  same arm, generic trio', SAMPLES, SAMPLES, { autoCrowdSec: 1.5 });
+  const pSlack0 = paired('budget slack taken to 0', john, john, { autoSlackSec: 0 });
+  const pSlackNeg = paired('budget slack taken to -0.8', john, john, { autoSlackSec: -0.8 });
+  // Every row is named-arm minus shipped, so the arms that change the lineup rather than the pins are passed
+  // first even though they are the counterfactual.
+  const pFourth = paired('a fourth piece scripted', repin(john, [4, 4, 4]), john);
+  const pJohnRounds = paired("johnson, its own auto_coral rounds", repin(john, [4, 2, 2]), john);
+  const newt = PRESETS.find((p) => p.key === 'newton').trio;
+  const pNewtonRounds = paired("newton, its own auto_coral rounds", repin(newt, [4, 4, 2]), newt);
+  const supGeneric = supply('generic trio', SAMPLES);
+  const supJohn = supply('johnson A1', PRESETS.find((p) => p.key === 'johnson').trio);
+  console.log('  None of these rows closes the AUTO column, and LEAVE is no longer the reason: every one of them reads leave +0.00, because');
+  console.log('  #123 put the fleet on the ROBOT STARTING LINE instead of 40 in on the REEF side of it, so what the budget used to buy with');
+  console.log(`  a leg of the routine is now 15 in of bumper. Taking the slack to 0 buys ${pSlack0.auto.s} AUTO CORAL (${pSlack0.autoPts.s} points)`);
+  console.log(`  and to -0.8 buys ${pSlackNeg.auto.s} (${pSlackNeg.autoPts.s}), both taken out of TELEOP (${pSlack0.tele.s} and ${pSlackNeg.tele.s}),`);
+  console.log(`  so the routine was already spending the seconds it asks for and the slack term only moves pieces between the two periods.`);
+  console.log(`  Scripting a fourth piece on all three machines is the same trade larger: ${pFourth.auto.s} AUTO CORAL and ${pFourth.autoPts.s}`);
+  console.log(`  AUTO points, ${pFourth.tele.s} TELEOP CORAL and ${pFourth.coral.s} off the MATCH's total CORAL column, for ${pFourth.total.s} of`);
+  const epa = (trio) => trio.map((p) => /auto_coral ([\d.]+)/.exec(p.ref)?.[1] ?? '?').join(' / ');
+  console.log(`  MATCH score. Rounding each team's own Statbotics auto_coral column (Johnson EPA ${epa(john)}, applied as 4 / 2 / 2)`);
+  console.log(`  rather than splitting the alliance ledger cuts both ways too (${pJohnRounds.coral.s} total CORAL on Johnson, ${pNewtonRounds.coral.s} on Newton),`);
+  console.log(`  so the shipped rule stays the ledger split and the gap is stated per lineup rather than averaged into a win. The de-conflict`);
+  console.log(`  arm has nothing to say about the MATCH either: ${pCrowd.auto.s} AUTO CORAL on Johnson and ${pCrowdGeneric.auto.s} on the generic`);
+  console.log(`  trio, ${pCrowd.total.s} and ${pCrowdGeneric.total.s} of MATCH score, ${pCrowd.leave.s} and ${pCrowdGeneric.leave.s} of LEAVE, which`);
+  console.log('  is why `autoCrowdSec` is pinned at 0 and guard 30 re-reads the arm every round: the pieces move into the period the ledger');
+  console.log(`  counts and out of the one it does not. What is left is distance. The column sits at ${supGeneric.auto.toFixed(2)} (generic)`);
+  console.log(`  and ${supJohn.auto.toFixed(2)} (Johnson) against the recorded 9; ${supGeneric.loosePct.toFixed(0)}% and ${supJohn.loosePct.toFixed(0)}%`);
+  console.log(`  of the AUTO picks are re-picks of a piece already loose on the carpet; ${supGeneric.idlePct.toFixed(0)}% and ${supJohn.idlePct.toFixed(0)}%`);
+  console.log(`  of AUTO robot-seconds are standing still; and ${supGeneric.stationLeft.toFixed(1)} and ${supJohn.stationLeft.toFixed(1)} of the`);
+  console.log("  station's 57 CORAL are still there at the whistle. Six MARKs and whatever a machine drops are the only AUTO supply the");
+  console.log('  routine can reach, and #123 moved those six to 106 in behind the REEF.');
+}
+
+// #124 and #125. The REEF is the only solid thing on the carpet a waypoint can hide behind, and a CORAL is
+// carried across that carpet. Both rows are the same MATCHes with one mechanism switched, so the difference is
+// the mechanism. The symptom is read off the frames as stretches in which a machine is told to go, has a
+// hexagon on the line, is against it, and never gets free — and 12 mirror MATCHes of them, because it is a
+// third of one percent of ROBOT-seconds even when it is there.
+{
+  const GEO2 = layout();
+  const REEFS2 = [GEO2.blue.reef, GEO2.red.reef];
+  const halfOf = () => 15; // R104's 120 in perimeter as a square: 30 in, half 15
+  const FS = 0.4;
+  const blocked = (x, y, tx, ty, heading) => {
+    const d = Math.hypot(tx - x, ty - y);
+    const n = Math.max(2, Math.ceil(d / 10));
+    for (let i = 1; i < n; i++) {
+      const f = i / n;
+      for (const reef of REEFS2) {
+        if (reefPenetration(reef, { x: x + (tx - x) * f, y: y + (ty - y) * f, heading, footprintHalfIn: halfOf() })) return true;
+      }
+    }
+    return false;
+  };
+  const pinned = (x, y, heading) => REEFS2.some((reef) => reefPenetration(
+    { x: reef.x, y: reef.y, apothem: reef.apothem + 6 },
+    { x, y, heading, footprintHalfIn: halfOf() },
+  ));
+  // An episode is one unbroken stretch of ROBOT-seconds in which the machine is told to go somewhere more than
+  // 22 in away, has a hexagon on the straight line to it, and is against that structure. It ends when any of
+  // those stop, and it is a STALL when the stretch ran 3 s or longer without closing 4 in from where it began.
+  // Counting whole stretches rather than the seconds past the third is what makes `longest` a number of seconds
+  // a driver would agree with, and 12 seeds is enough of them: the symptom is a third of one percent.
+  const SN = 12;
+  const stall = (override) => {
+    let robotSec = 0;
+    let stallSec = 0;
+    let unstick = 0;
+    const runs = [];
+    for (let i = 0; i < SN; i++) {
+      const m = playMatch({ seed: seedBase + i * 977, blueProfiles: SAMPLES, redProfiles: SAMPLES, scenarioOverride: override, record: true });
+      unstick += (m.events || []).filter((e) => e.kind === 'unstick').length;
+      const hist = new Map();
+      const close = (h) => {
+        if (h.since !== null && h.t - h.since >= 3 && h.from - h.last < 4) {
+          stallSec += h.t - h.since;
+          runs.push(h.t - h.since);
+        }
+        h.since = null;
+      };
+      for (const fr of m.frames) {
+        for (const rb of fr.robots) {
+          const key = `${rb.side}:${rb.slot}`;
+          const h = hist.get(key) || { since: null, from: 0, last: 0, t: 0 };
+          robotSec += FS;
+          h.t += FS;
+          const on = rb.target && !rb.busy && !rb.climb && !rb.disabled && !rb.defending;
+          const d = on ? Math.hypot(rb.target[0] - rb.x, rb.target[1] - rb.y) : 0;
+          if (on && d > 22 && pinned(rb.x, rb.y, rb.heading) && blocked(rb.x, rb.y, rb.target[0], rb.target[1], rb.heading)) {
+            if (h.since === null) {
+              h.since = h.t;
+              h.from = d;
+            }
+            h.last = d;
+          } else close(h);
+          hist.set(key, h);
+        }
+      }
+      for (const h of hist.values()) close(h);
+    }
+    runs.sort((a, b) => a - b);
+    return {
+      pct: (100 * stallSec) / robotSec,
+      eps: runs.length / SN,
+      longest: runs.length ? runs[runs.length - 1] : 0,
+      unstick: unstick / SN,
+    };
+  };
+  const price = (off, on, sb, seat) => {
+    const d = [];
+    for (let i = 0; i < N; i++) {
+      const seed = sb + i * 977;
+      const a = playMatch({ seed, blueProfiles: SAMPLES, redProfiles: SAMPLES, scenarioOverride: off });
+      const b = playMatch({ seed, blueProfiles: SAMPLES, redProfiles: SAMPLES, scenarioOverride: on });
+      d.push(b.final[seat].total - a.final[seat].total);
+    }
+    const m = d.reduce((s, v) => s + v, 0) / N;
+    const se = Math.sqrt(d.reduce((s, v) => s + (v - m) ** 2, 0) / (N - 1) / N);
+    return `${(m >= 0 ? '+' : '') + m.toFixed(2)} ± ${se.toFixed(2)} (${d.filter((v) => v !== 0).length}/${N} differ)`;
+  };
+  // The same arithmetic guard 17 reads the named presets against: 24 MATCHes on seed base 23000, both
+  // alliances, CORAL an ALLIANCE. The berth is priced here because that band is what it broke.
+  const ledgerCol = (key, sc) => {
+    const trio = PRESETS.find((p) => p.key === key).trio;
+    let coral = 0;
+    let n = 0;
+    for (let i = 0; i < N; i++) {
+      const m = playMatch({ seed: 23000 + i * 613, blueProfiles: trio, redProfiles: trio, scenarioOverride: sc });
+      for (const side of ['blue', 'red']) {
+        coral += Object.values(m.final[side].coral).reduce((a, x) => a + x.auto + x.tele, 0);
+        n += 1;
+      }
+    }
+    return coral / n;
+  };
+  const OFF = { detourOff: true, carryDrop: 0 };
+  const SHIP = { detourOff: false, carryDrop: 0, detourClearIn: 8, detourPressSec: 0.6 };
+  label('#124 the REEF between a ROBOT and its waypoint: when to go around, and how wide a berth to go around at');
+  for (const [name, sc] of [
+    ['off, the engine before #124', OFF],
+    ['press 0.0 s (every blocked trip), berth 8', { ...SHIP, detourPressSec: 0 }],
+    ['press 1.2 s, berth 8', { ...SHIP, detourPressSec: 1.2 }],
+    ['press 0.6 s, berth 2', { ...SHIP, detourClearIn: 2 }],
+    ['press 0.6 s, berth 4', { ...SHIP, detourClearIn: 4 }],
+    ['press 0.6 s, berth 14', { ...SHIP, detourClearIn: 14 }],
+    ['SHIPPED press 0.6 s, berth 8', SHIP],
+  ]) {
+    const s = stall(sc);
+    const j = ledgerCol('johnson', sc);
+    console.log(`  ${name.padEnd(38)} pinned-and-blocked ${s.pct.toFixed(2)}% of ROBOT-seconds · ${s.eps.toFixed(1)} episodes a MATCH · longest ${s.longest.toFixed(1)} s · unstick ${s.unstick.toFixed(1)} a MATCH · Johnson ${j.toFixed(1)} CORAL an ALLIANCE (TBA 59, guard band ±4)`);
+  }
+  console.log(`  shipped against off, own-side ${price(OFF, SHIP, 9000, 'blue')}`);
+  for (const sb of [9000, 21000]) for (const seat of ['blue', 'red']) {
+    console.log(`  the shipped fix at base ${sb} from ${seat}: own-side ${price(OFF, SHIP, sb, seat)}`);
+  }
+  console.log(`  and the two preset columns it was priced against: Johnson ${ledgerCol('johnson', OFF).toFixed(1)} -> ${ledgerCol('johnson', SHIP).toFixed(1)}, Newton ${ledgerCol('newton', OFF).toFixed(1)} -> ${ledgerCol('newton', SHIP).toFixed(1)} (recorded 59 and 56)`);
+  label('#125 a CORAL shaken loose by the drive, n=24 mirror MATCHes per rate');
+  for (const rate of [0.005, 0.01, 0.02]) {
+    const on = { detourOff: false, carryDrop: rate };
+    let drops = 0;
+    for (let i = 0; i < N; i++) {
+      const m = playMatch({ seed: seedBase + i * 977, blueProfiles: SAMPLES, redProfiles: SAMPLES, scenarioOverride: on });
+      drops += (m.events || []).filter((e) => e.kind === 'carry-drop').length;
+    }
+    console.log(`  rate ${String(rate).padEnd(6)} /s   ${(drops / N).toFixed(2)} CORAL a MATCH shaken loose on the drive · own-side against the same rate at 0 ${price(SHIP, on, seedBase, 'blue')}`);
+  }
+  console.log('  The gate is what makes the cure affordable. Diverting every trip a hexagon stands in cures the symptom and costs the named');
+  console.log('  preset a couple of CORAL an ALLIANCE, because a fleet working its own REEF has a hexagon on the line almost always; waiting');
+  console.log('  0.6 s for the machine that presses and stays pressed cures it to within noise of the same share and leaves that ledger column');
+  console.log('  where the record has it. The width is then free to be generous — 2, 4, 8 and 14 in all read the same share, and 8 in is the one');
+  console.log('  that also stops the long stretches coming back. The swing is worth points and the shake-loose takes a comparable amount out');
+  console.log('  of the same MATCH, so the two mechanisms together leave the score close to where it was and change what happens on the carpet.');
+}
