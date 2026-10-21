@@ -138,6 +138,17 @@
           <button class="btn cancel" id="btn-cancel" type="button" hidden>Cancel task</button>
           <div class="progress" id="progress" role="progressbar" aria-label="Simulation progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden><div class="bar" id="progress-bar"></div><span id="progress-label"></span></div>
         </div>
+
+        <!-- The setup is bytes: every card, switch and rate on this panel is written to this browser as you
+             edit it, and the same bytes fit in a link. One codec does both, so a link cannot restore something
+             the autosave would not. Long explanations live in web/js/statestore.js and README.md. -->
+        <div class="store-row">
+          <button class="btn" id="btn-copy-link" type="button" title="Write this setup into the address bar as a link and copy it. Anyone who opens it lands on the same six cards, switches and seed.">Copy setup link</button>
+          <button class="btn" id="btn-import-scouting" type="button" title="Fill the six cards from a scouting CSV: team, auto CORAL, teleop CORAL, NET ALGAE, BARGE points. Columns are listed in README.md.">Import scouting CSV</button>
+          <input type="file" id="inp-scouting" accept=".csv,text/csv,text/plain" class="visually-hidden" aria-label="Scouting CSV file" />
+          <button class="btn" id="btn-forget" type="button" title="Delete the saved setup from this browser. The page you are looking at does not change.">Forget saved setup</button>
+          <span class="hint" id="setup-store" role="status" aria-live="polite"></span>
+        </div>
       </section>
 
       <section class="panel field-panel" aria-labelledby="h-field">

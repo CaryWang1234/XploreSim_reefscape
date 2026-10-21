@@ -251,3 +251,130 @@ test('the single-MATCH charts derive from the frames and agree with the ledger t
     assert.equal(r.station + r.theirStation + r.mark + r.dropped, r.taken, `${r.name} bar does not add up to its own length`);
   }
 });
+
+// ---- the setup codec: bytes in, a setup out, or nothing --------------------------------------
+// `statestore.js` reads no storage and touches no DOM, so the decoder can be attacked here instead of in a
+// browser. A half-trusted link would be a way to crash the engine — or reach the page's object graph — from
+// somebody's clipboard, which is the reason these tests exist before the buttons do.
+import {
+  SETUP_VERSION, STORAGE_KEY, MAX_LINK_CHARS, buildSetup, readSetup, encode, decode, toLink, sameSetup, packProfile,
+} from '../web/js/statestore.js';
+import { PRESETS, HUMAN_PLAYER, ROBOT_PRESETS, presetIndexOf } from '../web/js/model.js';
+
+const shippedSetup = (over = {}) => buildSetup({
+  trios: { blue: PRESETS.find((p) => p.key === 'johnson').trio, red: PRESETS.find((p) => p.key === 'newton').trio },
+  hp: { blue: { ...HUMAN_PLAYER }, red: { ...HUMAN_PLAYER } },
+  cageDepth: { blue: [true, false, true], red: [true, true, false] },
+  kinds: { blue: 'ai', red: 'greedy' },
+  switches: {
+    fouls: true, qual: true, hpNet: true, turnRamp: true, contact: true, placeRisk: true, detour: true,
+    carryDrop: true, branchDedup: true, climbRisk: true, contactFouls: false, cardLadder: true, mirror: false,
+  },
+  numbers: { jitter: 20, seed: 12345, matches: 48, batchSeed: 51000 },
+  ...over,
+});
+
+test('a setup survives its own link, and the link is the bytes the autosave holds', () => {
+  const setup = shippedSetup();
+  assert.deepEqual(setup.problems, [], `the shipped lineup should pack without complaint: ${setup.problems.join(' / ')}`);
+  const { link, chars, error } = toLink(setup);
+  assert.equal(error, null);
+  assert.ok(link.startsWith('#s='), `a fragment link, not a query: ${link.slice(0, 12)}`);
+  assert.ok(chars < 4000, `six named cards should be a few hundred bytes, not ${chars}`);
+  assert.equal(encode(setup), link.slice(3), 'the autosave and the link are different bytes');
+  const back = readSetup(decode(link).obj);
+  assert.deepEqual(back.problems, [], back.problems.join(' / '));
+  const blue = back.setup.trios.blue;
+  const source = PRESETS.find((p) => p.key === 'johnson').trio;
+  for (let i = 0; i < 3; i++) {
+    assert.deepEqual(blue[i], source[i], `card ${i + 1} came back as a different machine`);
+  }
+  assert.equal(back.setup.switches.contactFouls, false);
+  assert.equal(back.setup.kind.blue, 'ai');
+  assert.deepEqual(back.setup.cageDepth.red, [true, true, false]);
+  assert.equal(back.setup.numbers.seed, 12345);
+  // Repacking what the decoder produced must give the same bytes: otherwise "save, restore, save" would
+  // drift, and the autosave would write on a setup nobody changed.
+  const repacked = buildSetup({
+    trios: back.setup.trios,
+    hp: back.setup.hp,
+    cageDepth: back.setup.cageDepth,
+    kinds: back.setup.kind,
+    switches: back.setup.switches,
+    numbers: back.setup.numbers,
+  });
+  assert.equal(sameSetup(repacked, setup), true, 'restoring and re-saving produced different bytes');
+  assert.equal(toLink(repacked).link, link, 'and therefore a different link for the same setup');
+});
+
+test('an edited card with no preset to diff against keeps every number the card can edit', () => {
+  const trio = PRESETS.find((p) => p.key === 'johnson').trio.map((p) => JSON.parse(JSON.stringify(p)));
+  trio[1].driveSpeedIps = 122;
+  trio[1].placeSec.L4 = 2.25;
+  trio[1].placeDrop.L4 = 0.31;
+  trio[1].autoCycles = 5;
+  trio[1].climbSuccess = 0.5;
+  trio[1].canClimbDeep = false;
+  trio[1].chassis = 'mecanum';
+  assert.equal(presetIndexOf(trio[1]), -1, 'the edited card should read as Custom before it is packed');
+  const packed = shippedSetup({ trios: { blue: trio, red: PRESETS.find((p) => p.key === 'newton').trio } });
+  const back = readSetup(decode(encode(packed)).obj);
+  assert.deepEqual(back.problems, [], back.problems.join(' / '));
+  // Every field the card can hold, and the identity the importer writes, come back. What does not come back
+  // is provenance: a hand-typed machine must not arrive wearing another team's `key`/`ref`/`pieces`.
+  const { key, ref, pieces, ...editable } = trio[1];
+  assert.deepEqual(back.setup.trios.blue[1], editable, 'a Custom card lost a field through the link');
+  assert.notEqual(back.setup.trios.blue[1].key, key, 'provenance rode along on a card that is not that preset');
+  const row = packProfile(trio[1]);
+  assert.equal(row.p, -1);
+  // A Custom card is its own numbers, and the two nested blocks travel flat so they can be clamped.
+  assert.ok(row.d.placeL4 && row.d.dropL4 && row.d.autoCycles === 5 && row.d.canClimbDeep === false);
+  assert.equal(row.d.placeSec, undefined, 'a nested object must not ride in a link');
+  assert.equal(row.d.key, undefined, 'a Custom card must not carry a preset key');
+});
+
+test('a link cannot reach the page object graph, and it says what it dropped', () => {
+  // The payload is built with JSON.parse because an object literal writes `__proto__` as a *prototype*, not
+  // as a key — a fixture written that way would prove nothing. First prove the fixture is a real own key.
+  const clean = (side) => packProfile(PRESETS.find((p) => p.key === side).trio[2]);
+  const hostile = JSON.parse(
+    `{"v":"${SETUP_VERSION}","blue":[{"p":-1,"d":{"__proto__":{"polluted":"yes"},"name":"Evil","driveSpeedIps":99999,"autoCycles":2.5,"team":"abc","placeSec":{"L4":99},"placeL4":0.5,"unknownField":1}},${JSON.stringify(clean('johnson'))},${JSON.stringify(clean('johnson'))}],"red":[${[0, 1, 2].map((i) => JSON.stringify(clean('newton'))).join(',')}]}`,
+  );
+  assert.ok(Object.getOwnPropertyNames(hostile.blue[0].d).includes('__proto__'), 'the fixture is not hostile after all');
+  assert.ok(Object.keys({}).length === 0, 'the control: a fresh object has no keys to begin with');
+  const before = Object.keys(Object.prototype);
+  const { setup, problems } = readSetup(hostile);
+  assert.deepEqual(Object.keys(Object.prototype), before, 'the decoder touched Object.prototype');
+  assert.equal(setup.trios.blue[0].polluted, undefined, 'the payload reached a card');
+  assert.equal(problems.length > 0, true, 'a hostile row was accepted without a word');
+  const text = problems.join(' · ');
+  assert.match(text, /__proto__|"unknownField"|no card field is called/i, `the dropped keys were not named: ${text}`);
+  assert.match(text, /placeSec.*as an object/, `a nested level block was not refused: ${text}`);
+  assert.match(text, /autoCycles/, `a fractional AUTO count was not reported: ${text}`);
+  assert.equal(setup.trios.blue[0].driveSpeedIps, 250, 'the out-of-range speed was not clamped');
+  assert.equal(setup.trios.blue.length, 3, 'a side with a bad card must keep the other two');
+});
+
+test('numbers out of range are clamped with a sentence, and a wrong version is refused whole', () => {
+  const setup = shippedSetup();
+  setup.blue[0].d = { driveSpeedIps: 99999, climbSuccess: 5, autoCycles: 2.5, netScoreSec: -4 };
+  const back = readSetup(setup);
+  assert.equal(back.setup.trios.blue[0].driveSpeedIps, 250, 'drive speed was not clamped to the codec range');
+  assert.match(back.problems.join(' '), /driveSpeedIps 99999 is outside/, 'a clamp with no message is a silent change');
+  assert.match(back.problems.join(' '), /autoCycles/, 'a fractional AUTO count was not reported');
+  assert.equal(back.setup.trios.blue[0].climbSuccess, 1);
+  assert.equal(back.setup.trios.blue[0].netScoreSec, 0);
+  const stale = readSetup({ ...shippedSetup(), v: 'xplore-setup-v1' });
+  assert.equal(stale.setup, null);
+  assert.match(stale.problems[0], /version/, `a stale entry should be refused by name: ${stale.problems[0]}`);
+  assert.match(stale.problems[0], new RegExp(SETUP_VERSION), 'the refusal should say what this page writes');
+});
+
+test('a setup that cannot fit a link is refused rather than truncated', () => {
+  const padded = { ...shippedSetup(), junk: 'x'.repeat(MAX_LINK_CHARS) };
+  const { link, chars, error } = toLink(padded);
+  assert.equal(link, null);
+  assert.ok(chars > MAX_LINK_CHARS);
+  assert.match(error, new RegExp(String(chars)), 'the message should carry the number the reader has to act on');
+  assert.ok(STORAGE_KEY.includes('reefscape'), 'the 2025 page must not write into the 2026 page storage key');
+});

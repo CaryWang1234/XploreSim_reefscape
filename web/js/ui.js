@@ -5,6 +5,7 @@
 import { createWorkerClient } from './worker-client.js';
 import { simulationSteps, runCooperatively, MAX_BATCH } from './simulation.js';
 import { frameIndexAtTime, parseReplay } from './replay.js';
+import { STORAGE_KEY, HASH_PREFIX, buildSetup as packSetup, readSetup, encode, decode, toLink } from './statestore.js';
 import { HUMAN_PLAYER, CHASSIS, PRESETS, ROBOT_PRESETS, presetIndexOf } from './model.js';
 import { layout } from './model.js';
 import { drawField } from './viz.js';
@@ -34,6 +35,19 @@ const PLACE_LEVELS = ['L1', 'L2', 'L3', 'L4'];
 
 const SPEC_FIELDS = [
   { key: 'driveSpeedIps', label: 'drive in/s', min: 40, max: 200, step: 5 },
+  // The one number on the card that is a team's code rather than its hardware. §6.4 makes AUTO a scripted
+  // routine with no driver input, so "how many CORAL does this machine put in the REEF before the whistle" is
+  // measured from a match recording, not inferred from a cycle time — and it is the column `npm run measure`
+  // and the README say the shipped profiles are short in (5.3 an ALLIANCE against the 9 the 2025cmptx ledger
+  // records). Before this it was only editable by picking a preset.
+  {
+    key: 'autoCycles',
+    label: 'AUTO CORAL',
+    min: 0,
+    max: 10,
+    step: 1,
+    title: `How many CORAL this machine's scripted AUTO scores, counting the piece it starts holding — §6.3.4.1 B preloads one per ROBOT, and the field stages only 6 CORAL MARKs (3 an ALLIANCE), so anything above 4 means the routine goes to a CORAL STATION. §6.4: no driver input, so this is what the team's code does, read from a match recording or the Statbotics auto_coral column. The AUTO loop keeps fetching while its placements are under this number and the round trip still fits in the ${TIME.autoSec} s, then clears its starting line. 0 = the machine only crosses the line for the LEAVE points.`,
+  },
   { key: 'pickSec', label: 'pick s', min: 0.3, max: 4, step: 0.1 },
   ...PLACE_LEVELS.map((lv) => ({
     key: `place${lv}`,
@@ -248,13 +262,17 @@ function rosterCard(side, idx) {
   return wrap;
 }
 
-function cageRow(side) {
+function cageRow(side, deep) {
   const wrap = document.createElement('div');
   for (let i = 0; i < 3; i++) {
     const label = document.createElement('label');
     const input = document.createElement('input');
     input.type = 'checkbox';
-    input.checked = i !== 1;
+    // §6.3.5 has the team choose before the MATCH, and the choice is read out of these boxes at run time, so
+    // the DOM is the only place it lives. A rebuild therefore has to carry the current ticks over (`deep`,
+    // read by buildSetup before it empties the block) instead of resetting every CAGE to the shipped
+    // deep-shallow-deep — which is what an imported CSV or a restored link would otherwise lose.
+    input.checked = deep ? !!deep[i] : i !== 1;
     input.dataset.side = side;
     input.dataset.i = String(i);
     label.append(input);
@@ -316,8 +334,10 @@ function buildSetup() {
       roster.appendChild(t);
     }
     const cages = $(`cages-${side}`);
+    const ticks = [...cages.querySelectorAll('input')];
+    const keep = ticks.length === 3 ? ticks.map((c) => c.checked) : null;
     cages.innerHTML = '';
-    cages.appendChild(cageRow(side));
+    cages.appendChild(cageRow(side, keep));
     const hp = $(`hp-${side}`);
     hp.innerHTML = '';
     hp.appendChild(hpRow(side));
@@ -368,6 +388,164 @@ function scenarioFromUI() {
 
 function optsFromUI() {
   return { labels: $('chk-labels').checked, targets: $('chk-targets').checked, numbers: $('chk-numbers').checked, geo: state.geo };
+}
+
+// ---------------------------------------------------------------------------
+// the setup as bytes: autosave and link
+// ---------------------------------------------------------------------------
+// Every control the setup is made of, in one place, because the autosave, the link and the CSV importer all
+// have to agree on what "the setup" means. `statestore.js` owns what the bytes mean; this owns the DOM.
+const SWITCH_IDS = {
+  fouls: 'chk-fouls',
+  qual: 'chk-qual',
+  hpNet: 'chk-hp-net',
+  turnRamp: 'chk-turn-ramp',
+  contact: 'chk-contact',
+  placeRisk: 'chk-place-risk',
+  detour: 'chk-detour',
+  carryDrop: 'chk-carry-drop',
+  branchDedup: 'chk-branch-dedup',
+  climbRisk: 'chk-climb-risk',
+  contactFouls: 'chk-contact-fouls',
+  cardLadder: 'chk-cardladder',
+  mirror: 'chk-mirror',
+};
+
+function captureSetup() {
+  const switches = {};
+  for (const [key, id] of Object.entries(SWITCH_IDS)) switches[key] = $(id).checked;
+  const cageDepth = { blue: [false, false, false], red: [false, false, false] };
+  for (const input of document.querySelectorAll('.cages input')) {
+    cageDepth[input.dataset.side][Number(input.dataset.i)] = input.checked;
+  }
+  return packSetup({
+    trios: state.trios,
+    hp: state.hp,
+    cageDepth,
+    kinds: { blue: $('sel-blue-kind').value, red: $('sel-red-kind').value },
+    switches,
+    numbers: {
+      jitter: parseFloat($('inp-jitter').value),
+      seed: parseInt($('inp-seed').value, 10),
+      matches: parseInt($('inp-matches').value, 10),
+      batchSeed: parseInt($('inp-batchseed').value, 10),
+    },
+  });
+}
+
+// An import or a link has to land on the controls, not on the scenario object, or the page would show one
+// setup and run another. Everything is written, then the panel is rebuilt once.
+let applyingSetup = false;
+function applySetup(setup) {
+  applyingSetup = true;
+  try {
+    for (const side of ['blue', 'red']) {
+      state.trios[side] = setup.trios[side].map(clone);
+      state.hp[side] = { ...setup.hp[side] };
+      setup.cageDepth[side].forEach((deep, i) => {
+        const box = document.querySelector(`.cages input[data-side="${side}"][data-i="${i}"]`);
+        if (box) box.checked = deep;
+      });
+      const sel = $(`sel-${side}-kind`);
+      sel.value = setup.kind[side];
+    }
+    state.mirror = !!setup.mirror;
+    $('chk-mirror').checked = state.mirror;
+    for (const [key, id] of Object.entries(SWITCH_IDS)) {
+      if (key === 'mirror') continue;
+      if (typeof setup.switches[key] === 'boolean') $(id).checked = setup.switches[key];
+    }
+    const n = setup.numbers;
+    if (n.jitter !== undefined && n.jitter !== null) $('inp-jitter').value = String(n.jitter);
+    if (n.seed !== undefined && n.seed !== null) $('inp-seed').value = String(n.seed);
+    if (n.matches !== undefined && n.matches !== null) $('inp-matches').value = String(n.matches);
+    if (n.batchSeed !== undefined && n.batchSeed !== null) $('inp-batchseed').value = String(n.batchSeed);
+    setBatchLabel();
+    buildSetup();
+  } finally {
+    applyingSetup = false;
+  }
+}
+
+function setupLine(text) {
+  $('setup-store').textContent = text;
+}
+
+function writeStorage(setup) {
+  try {
+    localStorage.setItem(STORAGE_KEY, encode(setup));
+    return null;
+  } catch (e) {
+    return e.name === 'QuotaExceededError' ? 'this browser will not store it (quota)' : 'this browser refused storage';
+  }
+}
+
+let saveTimer = null;
+// Editing a field is one keystroke of a twenty-minute job. The write is debounced so a link typed digit by
+// digit is stored once, and it is the same bytes `Copy setup link` writes.
+function queueSave() {
+  if (applyingSetup) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    const setup = captureSetup();
+    const problem = writeStorage(setup);
+    const { chars, error } = toLink(setup);
+    setupLine(problem ? `${problem} — the setup is not saved on this device` : `saved here · ${chars} bytes of link${error ? ' (too long to link)' : ''}`);
+  }, 600);
+}
+
+function restoreSetup() {
+  let raw = null;
+  try {
+    raw = localStorage.getItem(STORAGE_KEY);
+  } catch (e) {
+    setupLine('this browser refuses storage; nothing will be saved');
+    return;
+  }
+  const fromLink = location.hash.startsWith(HASH_PREFIX) ? location.hash.slice(HASH_PREFIX.length) : null;
+  const bytes = fromLink || raw;
+  if (!bytes) {
+    setupLine('nothing saved on this device yet');
+    return;
+  }
+  const { obj, error } = decode(bytes);
+  if (error) {
+    setupLine(fromLink ? `that link is not a setup (${error}) — showing the default lineup` : `the saved entry is unreadable (${error}) — showing the default lineup`);
+    return;
+  }
+  const { setup, problems } = readSetup(obj);
+  if (!setup) {
+    setupLine(problems[0] || 'the stored setup could not be read');
+    return;
+  }
+  applySetup(setup);
+  const note = problems.length ? ` · ${problems.length} field(s) repaired: ${problems[0]}` : '';
+  setupLine(fromLink ? `setup restored from this link${note}` : `setup restored from this browser${note}`);
+}
+
+function copySetupLink() {
+  const setup = captureSetup();
+  const { link, chars, error } = toLink(setup);
+  if (error) {
+    setupLine(error);
+    return;
+  }
+  history.replaceState(null, '', `${location.pathname}${location.search}${HASH_PREFIX}${link.slice(HASH_PREFIX.length)}`);
+  const done = () => setupLine(`link holds this whole setup · ${chars} characters, copied`);
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(`${location.origin}${location.pathname}${location.search}${HASH_PREFIX}${link.slice(HASH_PREFIX.length)}`).then(done, () => setupLine(`link is in the address bar (${chars} characters); the browser would not copy it`));
+  } else {
+    setupLine(`link is in the address bar (${chars} characters); this browser has no clipboard access`);
+  }
+}
+
+function forgetSetup() {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+    setupLine('saved setup deleted from this browser');
+  } catch (e) {
+    setupLine('this browser refused storage');
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2052,6 +2230,23 @@ function bind() {
     paintFrame();
   });
   for (const id of ['chk-labels', 'chk-targets', 'chk-numbers']) $(id).addEventListener('change', paintFrame);
+  // The setup panel is one delegated listener rather than fifty: every control that changes the setup is
+  // inside `.panel.setup`, including the cards this file builds at runtime, so a new field is saved without
+  // anyone remembering to register it. `input` catches the number fields as they are typed and `change`
+  // catches the selects, the checkboxes and the card inputs, which commit on blur.
+  const setupPanel = document.querySelector('.panel.setup');
+  for (const type of ['input', 'change']) {
+    setupPanel.addEventListener(type, (e) => {
+      if (e.target.matches('input, select')) queueSave();
+    });
+  }
+  $('btn-copy-link').addEventListener('click', copySetupLink);
+  $('btn-forget').addEventListener('click', forgetSetup);
+  // Opening a link in a tab that already has the page loaded is a hashchange, not a load, so the second half
+  // of the entry has to be listened for rather than only read at boot.
+  window.addEventListener('hashchange', () => {
+    if (location.hash.startsWith(HASH_PREFIX)) restoreSetup();
+  });
   window.addEventListener('resize', () => {
     state.canvasDirty = true;
     paintFrame();
@@ -2070,6 +2265,9 @@ function bind() {
 
 buildRosterControls();
 buildRuleTables();
+// Before the first MATCH, so the run the page plays is the run the saved setup describes — and so opening a
+// link does not show one lineup and replay another.
+restoreSetup();
 bind();
 // A match on load: the page should never present an empty canvas, and the first number a visitor sees
 // should be one the current build actually produced.

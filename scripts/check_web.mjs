@@ -191,5 +191,49 @@ for (const name of fs.readdirSync(path.join(ROOT, 'scripts'))) {
   if (!/"cards": "node scripts\/cards.mjs"/.test(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))) fail('package.json has no `npm run cards`, so the price has no reproducible print');
 }
 
+// The setup codec and the controls it is allowed to touch. `statestore.js` is DOM-free on purpose — that is
+// what lets runtime.test.mjs attack a hostile link — so this is where the two halves are held together: every
+// switch the codec can carry must be a checkbox the page has, and a checkbox the page has must be read by
+// something other than the codec, or the link stores a setting nothing runs with.
+{
+  const store = fs.readFileSync(path.join(ROOT, JS_DIR, 'statestore.js'), 'utf8');
+  const ui = fs.readFileSync(path.join(ROOT, JS_DIR, 'ui.js'), 'utf8');
+  for (const bad of ['document.', 'window.', 'localStorage.']) {
+    if (store.includes(bad)) fail(`statestore.js contains ${bad}: the codec must stay runnable outside a browser`);
+  }
+  const declared = [...store.matchAll(/const SWITCHES = \[([\s\S]*?)\];/g)][0];
+  if (!declared) fail('statestore.js has no SWITCHES list to compare the page against');
+  const names = declared ? [...declared[1].matchAll(/'([a-zA-Z]+)'/g)].map((m) => m[1]) : [];
+  const idBlock = ui.match(/const SWITCH_IDS = \{([\s\S]*?)\};/);
+  if (!idBlock) fail('ui.js has no SWITCH_IDS map, so the autosave cannot read the switches the codec names');
+  const mapPairs = [...(idBlock ? idBlock[1].matchAll(/^\s*([a-zA-Z]+): '([a-z0-9-]+)',/gm) : [])].map((m) => [m[1], m[2]]);
+  const mapped = mapPairs.map(([k]) => k);
+  for (const n of names) if (!mapped.includes(n)) fail(`the codec carries "${n}" but ui.js has no control for it`);
+  for (const n of mapped) if (!names.includes(n)) fail(`ui.js maps "${n}" to a control the codec will not carry`);
+  for (const [name, id] of mapPairs) {
+    const inHtml = (html.match(new RegExp(`id="${id}"`, 'g')) || []).length;
+    if (inHtml !== 1) fail(`#${id} for the "${name}" switch appears ${inHtml} times in index.html`);
+    const reads = (ui.match(new RegExp(`'${id}'`, 'g')) || []).length;
+    if (reads < 2) fail(`#${id} is in the capture map but nothing else reads it — the switch is stored and never used`);
+  }
+  if (!ui.includes("from './statestore.js'")) fail('ui.js does not import statestore.js');
+  for (const fn of ['buildSetup as packSetup', 'readSetup', 'encode', 'decode', 'toLink', 'STORAGE_KEY', 'HASH_PREFIX']) {
+    const importLine = ui.match(/import \{[^}]*\} from '\.\/statestore\.js'/)?.[0] || '';
+    if (!importLine.includes(fn)) fail(`ui.js does not import ${fn} from statestore.js`);
+  }
+  for (const [btn, fn] of [['btn-copy-link', 'copySetupLink'], ['btn-forget', 'forgetSetup'], ['setup-store', 'setupLine']]) {
+    if (!html.includes(`id="${btn}"`)) fail(`index.html has no #${btn}`);
+    if (!ui.includes(`'${btn}'`) || !ui.includes(`${fn}`)) fail(`ui.js never wires #${btn} to ${fn}`);
+  }
+  // A card is stored as a preset index, which only works if the codec and the card use the same identity test.
+  if (!store.includes('presetIndexOf')) fail('statestore.js no longer diffs a card against its preset');
+  if (!/restoreSetup\(\);/.test(ui)) fail('ui.js never restores the setup before the first MATCH — a saved link would show one lineup and play another');
+  // Rebuilding a CAGE row has to carry the ticks over: §6.3.5 puts the choice in the DOM (`scenarioFromUI`
+  // reads it there), so a re-render that resets it silently loses a restored link's or an imported CSV's
+  // endgame — which is exactly how this round's first browser run came back with the shipped pattern.
+  if (!ui.includes('const keep = ticks.length === 3 ? ticks.map((c) => c.checked) : null;')) fail('buildSetup no longer carries the CAGE ticks through a rebuild');
+  if (!ui.includes('input.checked = deep ? !!deep[i] : i !== 1;')) fail('cageRow no longer renders from the carried-over ticks');
+}
+
 console.log(bad === 0 ? `OK: ${files.length} files are UTF-8 clean and index.html tags balance.` : `${bad} problem(s).`);
 process.exit(bad === 0 ? 0 : 1);

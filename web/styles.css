@@ -221,6 +221,10 @@ code { font-family: var(--mono); font-size: 0.92em; color: var(--accent); }
    and right-align their labels against the far edge of the panel. */
 .run-row .pick { justify-content: flex-start; gap: 6px; }
 .run-row .pick input[type="number"] { width: 74px; }
+/* The autosave and the link, one line under the run buttons. The status text is the only readout, so it takes
+   the remaining width and truncates rather than pushing the buttons onto their own lines. */
+.store-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.store-row .hint { flex: 1; min-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .progress { flex: 1; min-width: 140px; height: 16px; border: 1px solid var(--line); border-radius: 8px; position: relative; overflow: hidden; background: #0f1620; }
 .progress .bar { height: 100%; width: 0%; background: var(--blue); transition: width 0.15s linear; }
 .progress span { position: absolute; inset: 0; display: grid; place-items: center; font-size: 11px; color: var(--text); }
