@@ -70,6 +70,19 @@ function histogram(values, lo, hi, bin = BIN) {
   return h;
 }
 
+// Which MATCH sits at each end of a distribution, not just what value is there. A batch prints a best score,
+// and the question a reader asks next is "which one was that, and what happened in it" — so the index travels
+// with the value and the page can hand that MATCH back as a replay. First index wins a tie.
+function extremes(values) {
+  let hi = 0;
+  let lo = 0;
+  for (let i = 1; i < values.length; i++) {
+    if (values[i] > values[hi]) hi = i;
+    if (values[i] < values[lo]) lo = i;
+  }
+  return { best: values[hi], bestAt: hi, worst: values[lo], worstAt: lo };
+}
+
 // One batch's worth of statistics, from the finished MATCHES. `evaluate` runs this loop headless and the
 // page runs it one MATCH at a time behind a progress bar, and both end here — so a headline number read
 // off the website is the same computation `npm run measure` prints.
@@ -84,6 +97,10 @@ export function aggregate(records) {
   const redWins = margins.filter((m) => m < 0).length;
   const ties = margins.filter((m) => m === 0).length;
   const p = (blueWins + 0.5 * ties) / n;
+  const eBlue = extremes(blue);
+  const eRed = extremes(red);
+  const eMargin = extremes(margins);
+  const eTotal = extremes(blue.map((b, i) => b + red[i]));
   const share = (side, get) => records.reduce((s, r) => s + (get(r.final[side]) ? 1 : 0), 0) / n;
   const per = (side, get) => records.reduce((s, r) => s + get(r.final[side]), 0) / n;
   // Fouls are charged to a ROBOT, so a batch has to say which seat conceded them and under which clause:
@@ -122,12 +139,24 @@ export function aggregate(records) {
     redScoreHist: histogram(red, SCORE_LO, SCORE_HI),
     marginHist: histogram(margins, -MARGIN_EDGE, MARGIN_EDGE),
     bin: { lo: SCORE_LO, hi: SCORE_HI, marginEdge: MARGIN_EDGE, size: BIN },
-    bestBlue: Math.max(...blue),
-    worstBlue: Math.min(...blue),
-    bestRed: Math.max(...red),
-    worstRed: Math.min(...red),
-    bestMargin: Math.max(...margins),
-    worstMargin: Math.min(...margins),
+    bestBlue: eBlue.best,
+    worstBlue: eBlue.worst,
+    bestRed: eRed.best,
+    worstRed: eRed.worst,
+    bestMargin: eMargin.best,
+    worstMargin: eMargin.worst,
+    bestTotal: eTotal.best,
+    worstTotal: eTotal.worst,
+    at: {
+      bestBlue: eBlue.bestAt,
+      worstBlue: eBlue.worstAt,
+      bestRed: eRed.bestAt,
+      worstRed: eRed.worstAt,
+      bestMargin: eMargin.bestAt,
+      worstMargin: eMargin.worstAt,
+      bestTotal: eTotal.bestAt,
+      worstTotal: eTotal.worstAt,
+    },
     rp: {
       blue: {
         auto: share('blue', (f) => f.rp.auto > 0),

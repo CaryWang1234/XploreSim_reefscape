@@ -5,6 +5,8 @@
   "type": "module",
   "description": "2025 FRC REEFSCAPE match simulator and tactical planner, modelled from the game manual.",
   "scripts": {
+    "test": "node --test scripts/runtime.test.mjs",
+    "validate": "npm run check && npm test && npm run verify",
     "check": "node scripts/check_web.mjs",
     "verify": "node scripts/invariants.mjs",
     "measure": "node scripts/measure.mjs",

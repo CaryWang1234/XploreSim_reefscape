@@ -237,7 +237,7 @@ export function greedyPolicy(side, opts = {}) {
   const strikes = new Map();
   // The slots pressing on THIS tick, so an opportunistic press knows the fleet already has one across. G421
   // makes two a MAJOR, and the seat-count ledger says the second one buys nothing anyway. Cleared on the tick
-  // because a press is re-decided every 0.2 s, not committed for a cycle.
+  // because a press is re-decided every 0.1 s, not committed for a cycle.
   const pressing = new Set();
   let pressTick = -1;
   const pressOver = (rb, obs) => {
@@ -321,7 +321,7 @@ export function greedyPolicy(side, opts = {}) {
   // spend or nowhere to spend it, which is what hands the machine back to the CAGE.
   const spendCostSec = (rb, obs) => (rb.coral >= 1 ? placeCostSec(rb, obs, wantLevel(rb, obs)) : rb.algae >= 1 ? deliverSec(rb, obs) : Infinity);
   // A ROBOT that decided to score before hanging has to be allowed to finish the drive: the decision clock
-  // re-reads the endgame branch every 0.2 s, and without the latch the CLIMB return would cancel the
+  // re-reads the endgame branch every 0.1 s, and without the latch the CLIMB return would cancel the
   // placement on the next tick and the CORAL would be dropped anyway.
   const spendFirst = new Set();
   return {
@@ -411,7 +411,7 @@ export function greedyPolicy(side, opts = {}) {
             if (both <= timeLeft) spendFirst.add(rb.slot);
             else spendFirst.delete(rb.slot);
             if (!spendFirst.has(rb.slot)) return { mode: INTENT.CLIMB };
-            // Fall through to the PLACE / ALGAE branches below; the latch is what stops the next 0.2 s
+            // Fall through to the PLACE / ALGAE branches below; the latch is what stops the next 0.1 s
             // decision from re-reading this branch and cancelling the drive.
           } else {
             return { mode: INTENT.CLIMB };

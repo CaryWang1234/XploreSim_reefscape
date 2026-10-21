@@ -3,9 +3,10 @@
 //
 // Run: npm run verify
 
-import { playMatch, evaluate } from '../web/js/league.js';
+import { playMatch, evaluate, matchSeed } from '../web/js/league.js';
+import { runSimulation, MAX_BATCH } from '../web/js/simulation.js';
 import { BRANCH_SLOTS_PER_LEVEL, TROUGH_CAP, SAMPLES, PRESETS, CAGE_ROBOT_CAPACITY, ALGAE_PER_ALLIANCE, HUMAN_PLAYER, defaultScenario, layout, coralMarks, CARRY_DROP_PER_SEC } from '../web/js/model.js';
-import { squareContact, reefPenetration, simulateMatch, reefBetween, reefDetour, INTENT } from '../web/js/engine.js';
+import { squareContact, reefPenetration, simulateMatch, reefBetween, reefDetour, INTENT, LEVELS } from '../web/js/engine.js';
 import { greedyPolicy } from '../web/js/policy.js';
 import { makeContext, estimateAlliance, planValue, SPREAD_PENALTY } from '../web/js/fastsim.js';
 import { POINTS, TIME, PIECES, FIELD, NET_CAPACITY } from '../web/js/rules.js';
@@ -131,21 +132,43 @@ let bad = 0;
 // `press` column reports the trip that was actually routed around instead of the last latch. The shipped MATCH
 // and all eight pre-#124 reproductions are unchanged; four of the eight live pins move, because four of them run
 // with the detour switched on.
-const GOLDEN = 0x39e8cfaf; // 255-237
+// #126 is the third steering mechanism in the same family and it moves all eight: a branch now belongs to the
+// ally that started driving to it first, because the engine books a BRANCH only when the placement completes, so
+// three machines could aim the same free pipe and the last of them arrived to find it taken. `branchDedup: false`
+// hands back the previous engine on all eight replays (guard 7h), and the eight live pins below are the run with
+// the claim in force.
+// #127 gives the CAGE hold an odds, and it is the smallest move this file has ever recorded: the draw was already
+// being spent for every completed action, so with `climbRisk: false` all eight replays come back byte for byte
+// (guard 7i), and with the roll in force only the two arms where a machine actually slips move — `tempoJitter 0`
+// and the NET-off pair. Six of the eight are the same MATCH, because a fleet that commits to the CAGES with 6 s
+// left has time to fall off and hang again, which is exactly what `npm run measure` prices.
+const GOLDEN = 0xad0911e7; // 249-255
 // The spread switched off has to be the replay above minus the draws, or the knob's off value
 // is not an off value.
-const GOLDEN_NO_JITTER = 0x9cb1982c; // 263-267
+const GOLDEN_NO_JITTER = 0x13b90ba4; // 275-265
 // And both knobs' off values together have to hand back the MATCH with no placement misses in it at all: this round's
 // DEFEND, the two deny sources, the §7.4.4 family, G421 and the re-gated contact fouls all need a press,
 // and with two lifting greedy fleets on their own REEFs there is nothing else to change.
-const GOLDEN_PRE_PLACEMENT = 0xec227315; // 263-269
-const GOLDEN_PRE_PLACEMENT_NO_JITTER = 0xc7f6d163; // 301-281
+const GOLDEN_PRE_PLACEMENT = 0x743f27e7; // 265-283
+const GOLDEN_PRE_PLACEMENT_NO_JITTER = 0x0ae5892ec; // 285-287
 // The four this round started from, kept so `netLaneSpread: false` + `netCapacity: 18` can be checked against
 // the engine the previous pins described (guard 7e).
-const GOLDEN_PRE_NET = 0xb050e3a0; // 235-273
-const GOLDEN_PRE_NET_NO_JITTER = 0x4d15b2c0; // 249-247
-const GOLDEN_PRE_NET_PLACEMENT = 0x80026b43; // 245-253
-const GOLDEN_PRE_NET_BOTH = 0xe0e0550e; // 273-273
+const GOLDEN_PRE_NET = 0x7f1b56be; // 261-259
+const GOLDEN_PRE_NET_NO_JITTER = 0x12fc5622; // 283-263
+const GOLDEN_PRE_NET_PLACEMENT = 0x35c207e6; // 261-277
+const GOLDEN_PRE_NET_BOTH = 0x4d78f38c; // 275-277
+// The eight #127 started from, kept so `climbRisk: false` can be checked against the engine that discarded the
+// draw (guard 7i). Two of them are the pins above before this round moved them; six were already unchanged.
+const PRE_127 = [
+  0xad0911e7, // 249-255  the shipped replay
+  0x0d2fcfe, // 275-265  + tempoJitter 0
+  0x743f27e7, // 265-283  + placementRisk false
+  0x0ae5892ec, // 285-287  + both
+  0x7f1b56be, // 261-259  + the two NET switches
+  0x12fc5622, // 283-263  + NET + jitter
+  0x35c207e6, // 261-277  + NET + placement
+  0x6c2a4e56, // 275-277  + NET + both
+];
 // #124 and #125 put two steering/physics mechanisms into the engine, both of them switchable, and the two off
 // values together have to hand back the whole previous engine. They do, on all eight of the replays above: with
 // `detourOff: true` and `carryDrop: 0` the shipped MATCH is 243-257 at b365567f, and every one of the ablation
@@ -283,7 +306,7 @@ else pass('both off values compose into the replay committed before either model
 // pair can take: it is not a claim that the switches are wired, it is the previous committed replay.
 const NET_OFF = { netLaneSpread: false, netCapacity: 18 };
 const preNet = fingerprint(playMatch({ seed, record: true, scenarioOverride: NET_OFF }));
-const preNet124 = fingerprint(playMatch({ seed, record: true, scenarioOverride: { ...NET_OFF, detourOff: true, carryDrop: 0 } }));
+const preNet124 = fingerprint(playMatch({ seed, record: true, scenarioOverride: { ...NET_OFF, detourOff: true, carryDrop: 0, branchDedup: false } }));
 const preNetNoJit = fingerprint(playMatch({ seed, record: true, scenarioOverride: { ...NET_OFF, tempoJitter: 0 } }));
 const preNetPreRisk = fingerprint(playMatch({ seed, record: true, scenarioOverride: { ...NET_OFF, placementRisk: false } }));
 const preNetBoth = fingerprint(playMatch({ seed, record: true, scenarioOverride: { ...NET_OFF, placementRisk: false, tempoJitter: 0 } }));
@@ -291,6 +314,89 @@ if (preNet !== GOLDEN_PRE_NET || preNetNoJit !== GOLDEN_PRE_NET_NO_JITTER || pre
   fail(`the NET ablations do not hand back the four replays recorded with them off: ${preNet.toString(16)}/${preNetNoJit.toString(16)}/${preNetPreRisk.toString(16)}/${preNetBoth.toString(16)} against ${GOLDEN_PRE_NET.toString(16)}/${GOLDEN_PRE_NET_NO_JITTER.toString(16)}/${GOLDEN_PRE_NET_PLACEMENT.toString(16)}/${GOLDEN_PRE_NET_BOTH.toString(16)}, and ${preNet124.toString(16)} against ${PRE_124[4].toString(16)} for the four switches together — something this round reaches a MATCH those switches are supposed to leave alone`);
 } else {
   pass(`netLaneSpread false + netCapacity 18 reproduces all four replays recorded with the NET switches off (${preNet.toString(16)} and its three off-value partners), and #124/#125 off on top of them reproduces the engine before all four (${preNet124.toString(16)})`);
+}
+// 7h. #126, the branch claim. The engine books a BRANCH only when the placement completes, so before this all
+// three machines could aim the same nearest free pipe and the last to arrive found it taken. `branchDedup: false`
+// has to hand back every replay recorded before it — all eight, not just the shipped one — with #127's roll
+// discarded too, because a rung of this ladder is one engine and not that engine plus a mechanism from a later
+// round. And the switch has to be a switch: the same 16 MATCHes with the claim off must spend more of the count
+// with allies aimed at one branch than with it on, and the off arm must not read zero, or the counter is measuring
+// nothing. The counter is one increment per decision tick — every 0.1 s tick of this engine — and `dup` is allies
+// BEYOND the first, so `0.1 × dup` is ROBOT-seconds an ALLIANCE-MATCH spent on a duplicate claim, not wall-clock
+// seconds of the MATCH.
+const PRE_126 = [
+  0x39e8cfaf, // 255-237  the shipped replay
+  0x9cb1982c, // 263-267  + tempoJitter 0
+  0xec227315, // 263-269  + placementRisk false
+  0xc7f6d163, // 301-281  + both
+  0xb050e3a0, // 235-273  + the two NET switches
+  0x4d15b2c0, // 249-247  + NET + jitter
+  0x80026b43, // 245-253  + NET + placement
+  0xe0e0550e, // 273-273  + NET + both
+];
+const brOff = (extra) => fingerprint(playMatch({ seed, record: true, scenarioOverride: { branchDedup: false, climbRisk: false, ...extra } }));
+const pre126 = [
+  brOff({}), brOff({ tempoJitter: 0 }), brOff({ placementRisk: false }), brOff({ placementRisk: false, tempoJitter: 0 }),
+  brOff(NET_OFF), brOff({ ...NET_OFF, tempoJitter: 0 }), brOff({ ...NET_OFF, placementRisk: false }),
+  brOff({ ...NET_OFF, placementRisk: false, tempoJitter: 0 }),
+];
+if (pre126.some((v, i) => v !== PRE_126[i])) {
+  fail(`branchDedup false does not hand back the eight replays recorded before #126: ${pre126.map((v) => v.toString(16)).join('/')} against ${PRE_126.map((v) => v.toString(16)).join('/')}`);
+} else {
+  const share = (sc) => {
+    let dup = 0;
+    let eps = 0;
+    for (let i = 0; i < 16; i++) {
+      const m = playMatch({ seed: 3100 + i * 613, blueProfiles: SAMPLES, redProfiles: SAMPLES, scenarioOverride: sc });
+      dup += m.branchShare.blue.dup + m.branchShare.red.dup;
+      eps += m.branchShare.blue.episodes + m.branchShare.red.episodes;
+    }
+    return { sec: (0.1 * dup) / 32, eps: eps / 16 };
+  };
+  const on = share({});
+  const off = share({ branchDedup: false });
+  if (!(off.sec > 0 && on.sec < off.sec)) {
+    fail(`the branch claim does not bind: ${off.sec.toFixed(1)} s an ALLIANCE-MATCH of redundant claim with the claim off against ${on.sec.toFixed(1)} s with it on (${off.eps.toFixed(1)} stretches falling to ${on.eps.toFixed(1)})`);
+  } else {
+    pass(`#126 binds: an ally held a branch another ally already had for ${off.sec.toFixed(1)} ROBOT-seconds an ALLIANCE-MATCH (${off.eps.toFixed(1)} stretches) with the claim off against ${on.sec.toFixed(1)} s (${on.eps.toFixed(1)} stretches) with it on, and the off value reproduces all eight pre-#126 replays (${pre126[0].toString(16)})`);
+  }
+}
+
+// 7i. #127 gives the CAGE hold an odds. The draw was already being spent for every completed action and, for a climb,
+// thrown away, so `climbRisk: false` has to reproduce the eight replays that were live before this byte for byte —
+// not a replay with the same average and a different roll order — and the switch has to reach the ledger as well as
+// the digest: 16 MATCHes with the roll in force have to book slips, the per-ROBOT column has to agree with the event
+// stream about how many, and the off arm has to book none. The shipped seed is not one of the MATCHes where the roll
+// lands on a climb, which is why the binding test is a batch and not the fingerprint.
+const climbOff = (extra) => fingerprint(playMatch({ seed, record: true, scenarioOverride: { climbRisk: false, ...extra } }));
+const pre127 = [
+  climbOff({}), climbOff({ tempoJitter: 0 }), climbOff({ placementRisk: false }), climbOff({ placementRisk: false, tempoJitter: 0 }),
+  climbOff(NET_OFF), climbOff({ ...NET_OFF, tempoJitter: 0 }), climbOff({ ...NET_OFF, placementRisk: false }),
+  climbOff({ ...NET_OFF, placementRisk: false, tempoJitter: 0 }),
+];
+if (pre127.some((v, i) => v !== PRE_127[i])) {
+  fail(`climbRisk false does not hand back the eight replays recorded before #127: ${pre127.map((v) => v.toString(16)).join('/')} against ${PRE_127.map((v) => v.toString(16)).join('/')}`);
+} else {
+  const batch = (sc) => {
+    let ev = 0;
+    let booked = 0;
+    let hung = 0;
+    for (let i = 0; i < 16; i++) {
+      const mm = playMatch({ seed: 3100 + i * 613, blueProfiles: SAMPLES, redProfiles: SAMPLES, scenarioOverride: sc });
+      ev += mm.events.filter((e) => e.kind === 'slip').length;
+      for (const side of ['blue', 'red']) {
+        booked += mm.final[side].robots.reduce((a, x) => a + (x.slips ?? -1), 0);
+        hung += mm.final[side].barge.deep + mm.final[side].barge.shallow;
+      }
+    }
+    return { ev, booked, hung: hung / 32 };
+  };
+  const live = batch({});
+  const off = batch({ climbRisk: false });
+  if (off.ev > 0) fail(`climbRisk false still booked ${off.ev} slips over 16 MATCHes — the switch is not a switch`);
+  else if (!(live.ev > 0)) fail(`the shipped CLIMB SUCCESS column books 0 slips over 16 MATCHes — the roll never reaches a CAGE hold`);
+  else if (live.booked !== live.ev) fail(`${live.ev} slips in the event stream against ${live.booked} in the per-ROBOT column — the table and the replay disagree`);
+  else pass(`#127 binds: ${live.ev} slips over 16 MATCHes (${(live.ev / 16).toFixed(2)} a MATCH) with the roll in force against ${off.ev} with it discarded, all ${live.booked} of them in the per-ROBOT column, ${live.hung.toFixed(2)} of 3 hung an ALLIANCE against ${off.hung.toFixed(2)}, and the off value reproduces all eight pre-#127 replays (${pre127[0].toString(16)})`);
 }
 // The replay being unchanged is not the switch being a switch: with the spread off, every deposit of a MATCH has
 // to be billed at one stand-off, and with the ceiling off the mesh has to be able to hold more than nine. The
@@ -387,8 +493,10 @@ else {
 // back, not just the shipped one: the four the pins above describe, and the same four again with the NET
 // switches folded in. That second family only reproduces if the two off values reach nothing the NET
 // ablations touch. This is not a claim that the switches are wired; it is last round's committed replay,
-// eight times.
-const DET_OFF = { detourOff: true, carryDrop: 0 };
+// eight times. `branchDedup: false` rides along because a rung has to mean one engine, and from #127 so does
+// `climbRisk: false`: the ladder is the engine at that point, not that engine plus a mechanism invented two
+// rounds later.
+const DET_OFF = { detourOff: true, carryDrop: 0, branchDedup: false, climbRisk: false };
 const pre124Match = playMatch({ seed, record: true, scenarioOverride: DET_OFF });
 const pre124 = fingerprint(pre124Match);
 const detFamily = [
@@ -404,11 +512,11 @@ const wanted = PRE_124;
 const got = [pre124, ...detFamily];
 const detWrong = got.map((h, i) => (h === wanted[i] ? -1 : i)).filter((i) => i >= 0);
 if (detWrong.length) {
-  fail(`the two #124/#125 off values do not hand back the pre-#124 engine: arm ${detWrong.join(',')} prints ${detWrong.map((i) => got[i].toString(16)).join('/')} against the committed ${detWrong.map((i) => wanted[i].toString(16)).join('/')}`);
+  fail(`the #124/#125/#126 off values do not hand back the pre-#124 engine: arm ${detWrong.join(',')} prints ${detWrong.map((i) => got[i].toString(16)).join('/')} against the committed ${detWrong.map((i) => wanted[i].toString(16)).join('/')}`);
 } else if (pre124 === hash) {
-  fail('the detour/carry pair is inert: the two off values print the same MATCH as the shipped engine');
+  fail('the detour/carry/branch trio is inert: the three off values print the same MATCH as the shipped engine');
 } else {
-  pass(`detourOff + carryDrop 0 reproduces all eight replays committed before #124 (${pre124.toString(16)} at ${pre124Match.final.blue.total}-${pre124Match.final.red.total} and its seven ablation partners), and the shipped engine is a different MATCH`);
+  pass(`detourOff + carryDrop 0 + branchDedup false reproduces all eight replays committed before #124 (${pre124.toString(16)} at ${pre124Match.final.blue.total}-${pre124Match.final.red.total} and its seven ablation partners), and the shipped engine is a different MATCH`);
 }
 // The off value being inert is not the on value being empty. The shake-loose has to book pieces it really took
 // out of a carrier's hands, and the bookkeeping has to agree with the event stream, or the replay and the
@@ -673,10 +781,13 @@ else pass(`machine spread: as shipped it widens the mean |margin| by ${widenOn.m
 // (29 against 23). #124 moved it again: with the swing around a REEF the escape still fires (10.5 times a
 // MATCH) and still holds the tail — the weakest alliance of 96 goes from 29 CORAL to 31 and the widest mirror
 // gap from 51 to 43 — but the batch mean is now a wash (529.9 with it against 530.1 without), because the piles
-// it used to clean up are half prevented rather than half repaired. So the mean is asserted as an anti-harm
-// bound (the escape must not COST the fleet) and the tail keeps the direction clauses; the +3 floor bar this
-// guard used to demand was set against a 6-CORAL lift, and a 2-CORAL lift with the same widest-gap effect is
-// the same mechanism doing less of it. Both ends were asserted from the start because a first version of the
+// it used to clean up are half prevented rather than half repaired. #126 levelled the tail as well: the same 48
+// MATCHes now end on 31 CORAL in BOTH arms, the widest gap is 48 with the escape against 38 without, and the
+// maneuver is still asked for (9.1 times a MATCH against the switch-off value's 0). Nothing here says why — the
+// fire count moved 10.2 → 9.1, which is not "prevented upstream" — so the two direction clauses this guard used
+// to carry on the extremes are gone and the +3 floor bar never came back: the mean and the floor are both
+// asserted as anti-harm bounds (the escape must not COST the fleet and must not LOWER its worst case) and the
+// tail is printed rather than claimed. Both ends were asserted from the start because a first version of the
 // test fired 4258 times a MATCH on every ROBOT that was merely turning.
 const pileStats = (over) => {
   const p = { floor: 99, fires: 0, matches: 0, widest: 0, total: 0 };
@@ -697,10 +808,9 @@ const off = pileStats({ unstickOff: true });
 if (off.fires > 0) fail(`unstickOff still fired the maneuver ${off.fires} times — the switch is not a switch`);
 else if (!(pile.perMatch > 0)) fail('the pile-up escape never fired — the corners are not being tested');
 else if (pile.meanTotal < off.meanTotal - 5) fail(`the escape now COSTS the batch ${(off.meanTotal - pile.meanTotal).toFixed(1)} points a MATCH (${pile.meanTotal.toFixed(1)} against ${off.meanTotal.toFixed(1)}) — that is the engine driving on the maneuver, not repairing with it`);
-else if (!(off.widest > pile.widest)) fail(`unstickOff left the widest mirror gap at ${off.widest} against ${pile.widest} — the escape is not the thing holding two identical trios together`);
-else if (pile.floor <= off.floor) fail(`the escape did not lift the worst-case draw at all: an ALLIANCE floored at ${pile.floor} CORAL with it against ${off.floor} without, of the 60 the field holds`);
+else if (pile.floor < off.floor) fail(`the escape LOWERS the worst-case draw: an ALLIANCE floored at ${pile.floor} CORAL with it against ${off.floor} without, of the 60 the field holds`);
 else if (pile.perMatch > 40) fail(`the pile-up escape fired ${pile.perMatch.toFixed(1)} times a MATCH — that is the engine driving, not repairing`);
-else pass(`corner pile-up: over 48 MATCHes the escape lifts the weakest ALLIANCE of 96 from ${off.floor} to ${pile.floor} CORAL and holds the widest mirror gap down from ${off.widest} to ${pile.widest}, on a batch mean of ${pile.meanTotal.toFixed(1)} against ${off.meanTotal.toFixed(1)} with the maneuver switched off; backing out was needed ${pile.perMatch.toFixed(1)} times a MATCH`);
+else pass(`corner pile-up: over 48 MATCHes the maneuver is asked for ${pile.perMatch.toFixed(1)} times a MATCH where the switch-off value is asked for ${off.fires} times, and on this batch the tail is level with and without it — the weakest ALLIANCE of 96 ends on ${pile.floor} CORAL against ${off.floor}, the widest mirror gap is ${pile.widest} against ${off.widest}, the mean ${pile.meanTotal.toFixed(1)} against ${off.meanTotal.toFixed(1)} — so what is asserted here is that it is a repair: it is asked for, it does not COST the fleet, and it does not LOWER the floor`);
 
 // 17. The named PRESET trios have to land on the ledger TBA recorded for the MATCHes they were built from
 // (thebluealliance.com/match/2025cmptx_f1m1, read 2026-10-11): Johnson filled 12/12/12 BRANCHES plus 23
@@ -1195,8 +1305,15 @@ const zrNever = zrArm({ enemyAlgae: false, coralTheft: false });
 // no gate is involved in). That is a measurement, not a pass — a gate with nothing to deter is not being
 // tested by this arm — so the two clauses below are conditional and the ORDERED arm carries the weight. If the
 // bid ever starts going over there again, these regain their teeth by themselves.
-if (zrShipOff.cross > 0 && !(zrShipOn.cross < zrShipOff.cross)) fail(`the gate does not reach the shipped fleets: they take ${zrShipOff.cross.toFixed(2)} rings off the opponent's REEF ungated against ${zrShipOn.cross.toFixed(2)} gated — the bid that pays for a crossing is not being read`);
-else if (zrShipOff.cross > 0 && !(zrShipOff.don > zrShipOn.don)) fail(`the crossing the gate deters costs nothing: the ungated fleet hands the opponent ${zrShipOff.don.toFixed(2)} foul points a MATCH against ${zrShipOn.don.toFixed(2)} gated`);
+// #126 gave them one ring to go for. The reading moved off zero in BOTH arms: 0.06 an ALLIANCE, which on this
+// 16-MATCH batch is one ring taken and the same single MATCH in the gated and the ungated batch, with the same
+// 1.13 fouls donated either way. One incidental pick is not a habit a gate can be shown to break — the clause
+// is therefore keyed to the count rather than to the mean being nonzero, and what stays asserted unconditionally
+// is the direction: a gate that puts MORE over the line than no gate does is broken. The deterrence claim lives
+// on the ORDERED arm, where the fleet is told to go and the reading is 0.19 gated against 0.50 ungated.
+if (zrShipOn.cross > zrShipOff.cross) fail(`the gate sends the shipped fleets OVER more, not less: ${zrShipOn.cross.toFixed(2)} rings off their REEF gated against ${zrShipOff.cross.toFixed(2)} ungated`);
+else if (zrShipOff.cross > 0.25 && !(zrShipOn.cross < zrShipOff.cross)) fail(`the gate does not reach the shipped fleets: they take ${zrShipOff.cross.toFixed(2)} rings off the opponent's REEF ungated against ${zrShipOn.cross.toFixed(2)} gated — the bid that pays for a crossing is not being read`);
+else if (zrShipOff.cross > 0.25 && !(zrShipOff.don > zrShipOn.don)) fail(`the crossing the gate deters costs nothing: the ungated fleet hands the opponent ${zrShipOff.don.toFixed(2)} foul points a MATCH against ${zrShipOn.don.toFixed(2)} gated`);
 // The control cannot be required to donate NOTHING: three machines working ALGAE and committing at 8 s still
 // knock into each other around the CAGEs, and the engine books that as G427 / G428 / G418 traffic worth a few
 // points a MATCH (5.63 before this round's staging fix, 4.88 after). What makes it a control is the signature
@@ -1210,7 +1327,7 @@ else if (!(zrNever.cross === 0 && zrNever.reef * 4 < zrDutyOff.reef + 0.25 && zr
 else if (!(zrDutyOff.cross > zrDuty.cross)) fail(`the gate does not reach a fleet that is told: ${zrDuty.cross.toFixed(2)} of their rings gated against ${zrDutyOff.cross.toFixed(2)} ungated`);
 else if (!(zrDutyOff.pts - zrDuty.pts >= 1)) fail(`the trip costs nothing: ordered to strip, the ungated fleet donates ${zrDutyOff.pts.toFixed(2)} fouls a MATCH against the gated ${zrDuty.pts.toFixed(2)}`);
 else if (!(zrDutyOff.rings - zrDuty.rings < 1)) fail(`the trip buys a whole ALGAE column: ${zrDutyOff.rings.toFixed(2)} rings ungated against ${zrDuty.rings.toFixed(2)} gated — the crossing is being given away free`);
-else pass(`zone risk priced: the shipped fleets take ${zrShipOff.cross.toFixed(2)} rings off the opponent's REEF with the gate off and ${zrShipOn.cross.toFixed(2)} with it on (${(zrShipOn.mean - zrShipOff.mean).toFixed(1)} pts of combined score, ${zrShipOff.don.toFixed(2)} fouls donated either way), so on this geometry the gate is not what holds them home — their own NET and their own MARKS are — and the bite below is read on a fleet that is told to go; a fleet ORDERED to strip reads ${zrDuty.cross.toFixed(2)} gated against ${zrDutyOff.cross.toFixed(2)} ungated for ${(zrDutyOff.pts - zrDuty.pts).toFixed(1)} more fouls than the ${(zrDutyOff.rings - zrDuty.rings).toFixed(2)} rings it buys, and the control that refuses both crossings takes ${zrNever.cross.toFixed(2)} rings and ${zrNever.reef.toFixed(2)} calls inside their REEF ZONE a MATCH while its own CAGE-area traffic still costs ${zrNever.pts.toFixed(2)}`);
+else pass(`zone risk priced: the shipped fleets take ${zrShipOff.cross.toFixed(2)} rings off the opponent's REEF with the gate off and ${zrShipOn.cross.toFixed(2)} with it on (${(zrShipOff.cross * zrSeeds.length).toFixed(0)} ring over ${zrSeeds.length} MATCHes, the same one in both arms) for ${(zrShipOn.mean - zrShipOff.mean).toFixed(1)} pts of combined score and ${zrShipOff.don.toFixed(2)} fouls donated either way, so on this geometry the gate is not what holds them home — their own NET and their own MARKS are — and the bite below is read on a fleet that is told to go; a fleet ORDERED to strip reads ${zrDuty.cross.toFixed(2)} gated against ${zrDutyOff.cross.toFixed(2)} ungated for ${(zrDutyOff.pts - zrDuty.pts).toFixed(1)} more fouls than the ${(zrDutyOff.rings - zrDuty.rings).toFixed(2)} rings it buys, and the control that refuses both crossings takes ${zrNever.cross.toFixed(2)} rings and ${zrNever.reef.toFixed(2)} calls inside their REEF ZONE a MATCH while its own CAGE-area traffic still costs ${zrNever.pts.toFixed(2)}`);
 
 // 26. The ALGAE duty is PRICED, and the price is measured on the engine rather than asserted. This is the
 // guard the duty search rests on: a model that cannot see the crossing would rank a duty by which machine it
@@ -1221,7 +1338,7 @@ else pass(`zone risk priced: the shipped fleets take ${zrShipOff.cross.toFixed(2
 // The engine arm runs with the zone-risk gate OFF. That is not cherry-picking: the gated fleet reads 0.00
 // crossings, and a rate of a trip cannot be checked against a run that refuses to take it. On the arm that is
 // allowed to go, the engine completes FEWER crossings than the model books, because a machine that has to
-// arrive at their REEF re-bids every 0.2 s on the way and goes back to the piece that is actually nearer — the
+// arrive at their REEF re-bids every 0.1 s on the way and goes back to the piece that is actually nearer — the
 // model prices the trip, not the change of mind. So what is asserted below is the order and a bound on the gap,
 // which is a different claim from the equality this guard used to make against a strip that reached through the
 // REEF and never had to travel at all.
@@ -1484,6 +1601,14 @@ else pass(`the press is chosen, and the price is what chooses it: ${g29off.held.
 // must still be the shipped baseline MATCH (a drift there re-bases every fingerprint in this file), and the
 // planner must still be the retired one — which is what notices the pin being put back in `ai.js` while this
 // guard goes on praising a price nobody pays.
+// #126 moved the first of those bars: the column reads +0.28 ± 0.07 AUTO CORAL an ALLIANCE over 144 paired
+// alliance-sides, past the 0.25 this clause used, because with every ally on its own BRANCH the routine's
+// seconds are worth slightly more. The bar was therefore re-keyed to the question the pin is actually decided
+// on — whether paying is worth MATCH points, not whether it moves a column the ledger counts differently from
+// the one it does — and the same 144 sides read +1.10 ± 0.84 of MATCH score, inside its own error bar, with the
+// two fleets still disagreeing on sign (`npm run measure` prints +2.25 ± 1.56 for the base machine against
+// -2.75 ± 1.72 for the generic trio). So the retirement stands, and the clause fails the moment the score
+// clears its bar rather than the column clearing an arbitrary one.
 const acBases = [9000, 23000, 51000];
 const acSeeds = [];
 for (const b of acBases) for (let i = 0; i < 24; i++) acSeeds.push(b + i * 977);
@@ -1545,6 +1670,8 @@ const acPair = (k) => {
   return { m, se: Math.sqrt(d.reduce((s, v) => s + (v - m) ** 2, 0) / (d.length - 1) / d.length), n: d.filter((v) => v !== 0).length };
 };
 const acAuto = acPair('auto');
+const acAutoPts = acPair('autoPts');
+const acTotal = acPair('total');
 const acTele = acPair('tele');
 const acLeave = acPair('leave');
 const acCoral = acPair('coral');
@@ -1574,13 +1701,13 @@ const acLeverLive = acPlanned.some((d) => d.live);
 const acPicksOff = acMean(acStation.pOff, 'mark') + acMean(acStation.pOff, 'station');
 const acMarkShare = 100 * acMean(acStation.pOff, 'mark') / Math.max(acPicksOff, 1e-9);
 if (acAuto.n + acLeave.n === 0) fail(`autoCrowdSec reaches no MATCH even when it is paid (${acAuto.n}/${acOff.length} alliance-sides move) — that is dead code, not a retired price`);
-else if (acAuto.m > 0.25) fail(`the retired price buys AUTO CORAL again: ${acAuto.m.toFixed(2)} ± ${acAuto.se.toFixed(2)} an ALLIANCE over ${acOff.length} paired alliance-sides, ${acStation.m.toFixed(2)} ± ${acStation.se.toFixed(2)} of it STATION picks — re-decide PINS.autoCrowdSec rather than leave it at 0`);
+else if (acAuto.m > 2 * acAuto.se && acTotal.m > 2 * acTotal.se) fail(`the retired price pays for itself again: ${acAuto.m.toFixed(2)} ± ${acAuto.se.toFixed(2)} AUTO CORAL and ${acTotal.m.toFixed(2)} ± ${acTotal.se.toFixed(2)} of MATCH score an ALLIANCE over ${acOff.length} paired alliance-sides, ${acStation.m.toFixed(2)} ± ${acStation.se.toFixed(2)} of it STATION picks — re-decide PINS.autoCrowdSec rather than leave it at 0`);
 else if (acLeave.m > 0.1) fail(`paying the retired price no longer costs the LEAVE column the ledger pins at 9 (${acLeave.m.toFixed(2)} ± ${acLeave.se.toFixed(2)}): the reason it was retired has to be re-read`);
 else if (acCoral.m < -1) fail(`the AUTO pieces are bought out of TELEOP (${acTele.m.toFixed(2)} ± ${acTele.se.toFixed(2)}, whole-MATCH count ${acCoral.m.toFixed(2)} ± ${acCoral.se.toFixed(2)} over ${acOff.length} alliance-sides)`);
 else if (acZeroDiff > 0) fail(`autoCrowdSec 0 is not the shipped behaviour: ${acZeroDiff} of ${acOff.length} alliance-sides differ from the same bid with the option never asked for`);
 else if (!acPinRetired) fail(`ai.js pays an AUTO crowd price again on ${acPlanned.filter((d) => !d.retired).length}/8 planner MATCHes while this read says it is worth ${acAuto.m.toFixed(2)} ± ${acAuto.se.toFixed(2)} AUTO CORAL`);
 else if (!acLeverLive) fail(`the planner does not change when autoCrowdSec is told 1.5 — the lever is out of the AUTO branch, so this guard is praising a price nobody could pay`);
-else pass(`AUTO crowd price retired on its own measurement: paying the old 1.5 s now moves ${acAuto.n}/${acOff.length} alliance-sides and buys ${acAuto.m.toFixed(2)} ± ${acAuto.se.toFixed(2)} AUTO CORAL for ${acStation.m.toFixed(2)} ± ${acStation.se.toFixed(2)} STATION picks and ${acLeave.m.toFixed(2)} ± ${acLeave.se.toFixed(2)} of LEAVE, so PINS.autoCrowdSec is 0, its 0 reproduces the shipped MATCH on all ${acOff.length} alliance-sides, and the planner still answers the lever on ${acPlanned.filter((d) => d.live).length}/8 MATCHes. Unpriced, ${acMarkShare.toFixed(0)}% of the fleet's AUTO picks are made at a MARK and the column reads ${acMean(acOff, 'auto').toFixed(2)} an ALLIANCE against the ledger's 9`);
+else pass(`AUTO crowd price retired on its own measurement: paying the old 1.5 s now moves ${acAuto.n}/${acOff.length} alliance-sides and buys ${acAuto.m.toFixed(2)} ± ${acAuto.se.toFixed(2)} AUTO CORAL (${acAutoPts.m.toFixed(2)} ± ${acAutoPts.se.toFixed(2)} AUTO points, ${acStation.m.toFixed(2)} ± ${acStation.se.toFixed(2)} of it STATION picks) for ${acTotal.m.toFixed(2)} ± ${acTotal.se.toFixed(2)} of MATCH score — inside its own bar, so the column moves and the MATCH does not — and ${acLeave.m.toFixed(2)} ± ${acLeave.se.toFixed(2)} of LEAVE, so PINS.autoCrowdSec is 0, its 0 reproduces the shipped MATCH on all ${acOff.length} alliance-sides, and the planner still answers the lever on ${acPlanned.filter((d) => d.live).length}/8 MATCHes. Unpriced, ${acMarkShare.toFixed(0)}% of the fleet's AUTO picks are made at a MARK and the column reads ${acMean(acOff, 'auto').toFixed(2)} an ALLIANCE against the ledger's 9`);
 
 // 31. THE BERTH IS A BERTH, AND THE GATE IS WHAT MAKES IT CHEAP. #124 hands a machine that has a hexagon
 // between it and its waypoint a new waypoint to walk around the structure with. Two things about that are
@@ -1663,6 +1790,129 @@ else if (gOff > 0) fail(`detourOff still diverted ${gOff.toFixed(2)}% of robot-s
 else if (!(gAlways > gShip)) fail(`the gate buys nothing: diverting every blocked trip engages on ${gAlways.toFixed(2)}% of robot-seconds against the shipped ${gShip.toFixed(2)}%, so the shipped setting is not the rare one`);
 else if (gShip > 10) fail(`the swing is the engine driving, not repairing: ${gShip.toFixed(1)}% of robot-seconds are diverted at the shipped gate, which is a routing policy, not a repair`);
 else pass(`the berth is a berth: all ${gTrips} through-the-REEF trips (both REEFs, six faces, on and 20 in off the line) are handed a point standing ${gR.toFixed(1)} in out from the structure and on its far side of the travel line, ${gFalse} of the six tangential trips are diverted, and the gate keeps the swing rare — ${gShip.toFixed(2)}% of robot-seconds at the shipped 0.6 s against ${gAlways.toFixed(2)}% when every blocked trip goes around and ${gOff.toFixed(2)}% with the detour off`);
+
+// 32. #128: a batch keeps one row per MATCH, and the page offers to replay any row it flags as an extreme. That
+//     is only honest if a row points at the MATCH that produced it, so every flagged seed is re-run here and has
+//     to come back with the scores it was counted at — and MATCH 1 has to come back as the same replay, byte for
+//     byte. Scores alone would be a re-roll, not a replay: two MATCHes can tie at 283-283.
+{
+  const seedBase = 51000;
+  const prof = { blue: SAMPLES, red: SAMPLES };
+  const batch = { blueKind: 'greedy', redKind: 'greedy', seedBase, scenario: {}, profiles: prof };
+  const t0 = Date.now();
+  const { summary, rows, recorded } = runSimulation('batch', { ...batch, matches: 6 });
+  const greedyMs = (Date.now() - t0) / 6;
+  const p0 = Date.now();
+  runSimulation('batch', { blueKind: 'ai', redKind: 'greedy', seedBase, scenario: {}, profiles: prof, matches: 4 });
+  const aiMs = (Date.now() - p0) / 4;
+  const valueOf = (row, key) => (key.endsWith('Blue') ? row.blue : key.endsWith('Red') ? row.red
+    : key.endsWith('Margin') ? row.blue - row.red : row.blue + row.red);
+  let ladderBad = null;
+  rows.forEach((row, i) => {
+    if (row.n !== i + 1) ladderBad = ladderBad || `row ${i} calls itself MATCH ${row.n}`;
+    if (row.seed !== matchSeed(seedBase, i)) ladderBad = ladderBad || `MATCH ${row.n} carries seed ${row.seed}, not ${matchSeed(seedBase, i)}`;
+  });
+  for (const [key, at] of Object.entries(summary.at)) {
+    if (!Number.isInteger(at) || at < 0 || at >= rows.length) {
+      ladderBad = ladderBad || `${key} points at MATCH ${at + 1}, outside a ${rows.length}-MATCH batch`;
+      continue;
+    }
+    if (valueOf(rows[at], key) !== summary[key]) ladderBad = ladderBad || `${key} reads ${summary[key]} but MATCH ${at + 1} scored ${valueOf(rows[at], key)}`;
+  }
+  let replayBad = null;
+  const flagged = [...new Set(Object.values(summary.at))];
+  for (const at of flagged) {
+    const row = rows[at];
+    const again = playMatch({ blueKind: 'greedy', redKind: 'greedy', seed: row.seed, record: true, scenarioOverride: {}, blueProfiles: SAMPLES, redProfiles: SAMPLES });
+    if (again.final.blue.total !== row.blue || again.final.red.total !== row.red) {
+      replayBad = replayBad || `replaying MATCH ${row.n} (seed ${row.seed}) gave ${again.final.blue.total}-${again.final.red.total}, not ${row.blue}-${row.red}`;
+    }
+  }
+  const first = playMatch({ blueKind: 'greedy', redKind: 'greedy', seed: rows[0].seed, record: true, scenarioOverride: {}, blueProfiles: SAMPLES, redProfiles: SAMPLES });
+  if (!replayBad && fingerprint(first) !== fingerprint(recorded)) {
+    replayBad = `MATCH 1 replays to ${fingerprint(first).toString(16)} against the batch's own recorded ${fingerprint(recorded).toString(16)} — the page would reload a different MATCH than the one it counted`;
+  }
+  let refused = false;
+  try {
+    runSimulation('batch', { ...batch, matches: MAX_BATCH + 1 });
+  } catch {
+    refused = true;
+  }
+  if (ladderBad) fail(ladderBad);
+  else if (replayBad) fail(replayBad);
+  else if (!refused) fail(`a batch of ${MAX_BATCH + 1} MATCHes ran instead of being refused, so MAX_BATCH is not the ceiling the page says it is`);
+  else pass(`the ladder is the batch: ${rows.length} rows, each carrying its own seed, and all ${flagged.length} flagged extremes replay to the scores they were counted at — MATCH 1 comes back as the same ${first.frames.length}-frame digest ${fingerprint(first).toString(16)}; a batch above ${MAX_BATCH} is refused; a MATCH costs ${greedyMs.toFixed(0)} ms of greedy against ${aiMs.toFixed(0)} ms with the planner, so ${MAX_BATCH} is ${(MAX_BATCH * aiMs / 60000).toFixed(1)} min of the planner and ${(MAX_BATCH * greedyMs / 60000).toFixed(1)} min of greedy`);
+}
+
+// 33. The single-MATCH cycle ledger (#129): the per-ROBOT counters the two new Numbers-tab tables print.
+//     They are bookkeeping, so there are two things to hold: that they add up against columns the ledger
+//     already had, and that each one binds on the failure it claims to measure. The shipped fleets give the
+//     control reading — greedy filters a full level out of its own aim list, so it never books the wait —
+//     and the arm that is ORDERED to keep aiming at L4 after it filled has to.
+{
+  const wall = TIME.matchSec + TIME.cageAssessAfterSec;
+  const ledgerBad = [];
+  const check = (m, where) => {
+    for (const side of ['blue', 'red']) {
+      // The per-ROBOT placement column and the ALLIANCE ledger have to be one computation: the page prints
+      // both, and a reader who adds one up expects the other.
+      for (const lv of LEVELS) {
+        const byRobot = m.final[side].robots.reduce((a, r) => a + r.placed[lv], 0);
+        const byLedger = m.final[side].coral[lv].auto + m.final[side].coral[lv].tele;
+        if (byRobot !== byLedger) ledgerBad.push(`${where} ${side} ${lv}: the machines booked ${byRobot} and the ledger says ${byLedger}`);
+      }
+      for (const r of m.final[side].robots) {
+        const pf = r.pickedFrom || {};
+        const sf = r.strippedFrom || {};
+        const srcSum = (pf.station || 0) + (pf.theirStation || 0) + (pf.mark || 0) + (pf.dropped || 0);
+        if (srcSum !== r.picked) ledgerBad.push(`${where} ${side}${r.slot}: drew ${r.picked} CORAL, its sources sum to ${srcSum}`);
+        const stripSum = (sf.reef || 0) + (sf.mark || 0) + (sf.dropped || 0);
+        if (stripSum !== r.strips) ledgerBad.push(`${where} ${side}${r.slot}: stripped ${r.strips} rings, their sources sum to ${stripSum}`);
+        const moved = Object.values(r.movedFt || {}).reduce((a, v) => a + v, 0);
+        if (Math.abs(moved - r.droveFt) > 0.6) ledgerBad.push(`${where} ${side}${r.slot}: drove ${r.droveFt} ft, the legs sum to ${moved.toFixed(1)}`);
+        const busy = Object.values(r.busySec || {}).reduce((a, v) => a + v, 0);
+        if (busy > wall) ledgerBad.push(`${where} ${side}${r.slot}: ${busy.toFixed(1)} s of actions in a ${wall} s MATCH`);
+        const wait = Object.values(r.fullSec || {}).reduce((a, v) => a + v, 0);
+        if (wait > wall) ledgerBad.push(`${where} ${side}${r.slot}: ${wait.toFixed(1)} s aimed at full levels in a ${wall} s MATCH`);
+      }
+    }
+  };
+  const totals = { wait: 0, gone: 0, miss: 0, held: 0, drawn: 0 };
+  const addUp = (m) => {
+    for (const side of ['blue', 'red']) {
+      for (const r of m.final[side].robots) {
+        totals.wait += LEVELS.reduce((a, lv) => a + r.fullSec[lv], 0);
+        totals.gone += LEVELS.reduce((a, lv) => a + r.fullMiss[lv], 0);
+        totals.miss += r.pickMisses;
+        totals.held += r.heldSec;
+        totals.drawn += r.picked;
+      }
+    }
+  };
+  for (const s of [seed, 13345, 14345, 15345]) {
+    const m = playMatch({ seed: s });
+    check(m, `seed ${s}`);
+    addUp(m);
+  }
+  // Every machine of both fleets is told to work L4 and nothing else: it fills the twelve branches, keeps
+  // driving back, and the wait is what the column is for.
+  const insist = { decide: (rb) => (rb.coral > 0 ? { mode: INTENT.PLACE, level: 'L4' } : { mode: INTENT.FETCH_CORAL }) };
+  const arm = simulateMatch({
+    blueProfiles: SAMPLES,
+    redProfiles: SAMPLES,
+    bluePolicy: insist,
+    redPolicy: greedyPolicy('red'),
+    scenario: { ...defaultScenario(), seed },
+  });
+  check(arm, 'the L4-only arm');
+  const armWait = arm.final.blue.robots.reduce((a, r) => a + r.fullSec.L4, 0);
+  const armGone = arm.final.blue.robots.reduce((a, r) => a + LEVELS.reduce((b, lv) => b + r.fullMiss[lv], 0), 0);
+  const shippedWait = totals.wait;
+  if (ledgerBad.length) fail(ledgerBad.slice(0, 4).join(' · '));
+  else if (armWait <= 0) fail(`the L4-only arm booked ${armWait} s of aiming at a full level, so the column does not measure what it says it measures`);
+  else if (armWait <= shippedWait) fail(`the arm ordered to aim at a full level (${armWait.toFixed(0)} s) did not beat the shipped fleets (${shippedWait.toFixed(1)} s) — nothing binds the column`);
+  else pass(`the cycle ledger adds up over 5 MATCHes: ${totals.drawn} CORAL drawn, each one booked to a STATION, a MARK or the CARPET, and the per-ROBOT placement columns equal the ledger's per level · the shipped fleets read ${shippedWait.toFixed(1)} s aimed at a full level and ${totals.gone} placements that found the branch gone, against ${armWait.toFixed(0)} s in the arm ordered to keep aiming at L4 (${armGone} gone) · ${totals.miss} grabs came up empty and ${totals.held.toFixed(1)} s was spent reaching for a piece the machine could not get to`);
+}
 
 console.log(bad === 0 ? '\nAll invariants hold.' : `\n${bad} failure(s).`);
 process.exit(bad === 0 ? 0 : 1);

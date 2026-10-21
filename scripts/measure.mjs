@@ -623,7 +623,133 @@ label(`AUTO supply, and what the routine does with the seconds it has (n=${N} mi
   console.log('  The gate is what makes the cure affordable. Diverting every trip a hexagon stands in cures the symptom and costs the named');
   console.log('  preset a couple of CORAL an ALLIANCE, because a fleet working its own REEF has a hexagon on the line almost always; waiting');
   console.log('  0.6 s for the machine that presses and stays pressed cures it to within noise of the same share and leaves that ledger column');
-  console.log('  where the record has it. The width is then free to be generous — 2, 4, 8 and 14 in all read the same share, and 8 in is the one');
-  console.log('  that also stops the long stretches coming back. The swing is worth points and the shake-loose takes a comparable amount out');
-  console.log('  of the same MATCH, so the two mechanisms together leave the score close to where it was and change what happens on the carpet.');
+  console.log('  where the record has it. The width has a floor and then stops mattering: 4, 8 and 14 in read the same share and the same');
+  console.log('  longest stretch, while a 2 in berth leaves a 36 s one behind it, so 8 in is the flat part of the curve with room in it.');
+  console.log('  The swing is worth points and the shake-loose takes a comparable amount out of the same MATCH, so the two mechanisms');
+  console.log('  together leave the score close to where it was and change what happens on the carpet.');
+}
+
+// #126. The engine books a BRANCH when the placement completes, not when a machine decides to go there, so before
+// this the three machines of an ALLIANCE all bid the same nearest free pipe on their chosen level and the last one
+// arrived to find it taken. The count is in the engine (`st.branchShare`, one increment per 0.1 s decision in which
+// an ally holds a claim another ally already has), so this reads the same fact the guard asserts rather than a
+// recorded timeline. The factor is the tick, and `dup` is allies BEYOND the first, so the result is ROBOT-seconds.
+{
+  const arm = (kind, sc, sb) => {
+    let dup = 0;
+    let eps = 0;
+    const blue = [];
+    const red = [];
+    for (let i = 0; i < N; i++) {
+      const m = playMatch({
+        seed: sb + i * 977, blueKind: kind, redKind: kind,
+        blueProfiles: SAMPLES, redProfiles: SAMPLES, scenarioOverride: sc,
+      });
+      dup += m.branchShare.blue.dup + m.branchShare.red.dup;
+      eps += m.branchShare.blue.episodes + m.branchShare.red.episodes;
+      blue.push(m.final.blue.total);
+      red.push(m.final.red.total);
+    }
+    return { sec: (0.1 * dup) / (2 * N), eps: eps / N, blue, red };
+  };
+  const paired = (a, b) => {
+    const d = b.blue.map((v, i) => v - a.blue[i]);
+    const m = d.reduce((s, v) => s + v, 0) / d.length;
+    const se = Math.sqrt(d.reduce((s, v) => s + (v - m) ** 2, 0) / (d.length - 1) / d.length);
+    return `${(m >= 0 ? '+' : '') + m.toFixed(2)} ± ${se.toFixed(2)} (${d.filter((v) => v !== 0).length}/${d.length} differ)`;
+  };
+  const col126 = (key, sc) => {
+    const trio = PRESETS.find((p) => p.key === key).trio;
+    let coral = 0;
+    let n = 0;
+    for (let i = 0; i < N; i++) {
+      const m = playMatch({ seed: 23000 + i * 613, blueProfiles: trio, redProfiles: trio, scenarioOverride: sc });
+      for (const side of ['blue', 'red']) {
+        coral += Object.values(m.final[side].coral).reduce((a, x) => a + x.auto + x.tele, 0);
+        n += 1;
+      }
+    }
+    return coral / n;
+  };
+  label('#126 two allies on one BRANCH, n=24 mirror MATCHes per fleet and seed base');
+  const OFF126 = { branchDedup: false };
+  for (const [kind, name] of [['greedy', 'greedy fleet'], ['ai', 'planner fleet']]) {
+    for (const sb of [9000, 21000]) {
+      const off = arm(kind, OFF126, sb);
+      const on = arm(kind, {}, sb);
+      console.log(`  ${name.padEnd(14)} base ${sb}: shared ${off.sec.toFixed(1)} -> ${on.sec.toFixed(1)} ROBOT-seconds an ALLIANCE-MATCH · stretches ${off.eps.toFixed(1)} -> ${on.eps.toFixed(1)} · own-side paired ${paired(off, on)}`);
+    }
+  }
+  const jOff = col126('johnson', OFF126);
+  const jOn = col126('johnson', {});
+  const nOff = col126('newton', OFF126);
+  const nOn = col126('newton', {});
+  console.log(`  and the two preset columns it is priced against: Johnson ${jOff.toFixed(1)} -> ${jOn.toFixed(1)}, Newton ${nOff.toFixed(1)} -> ${nOn.toFixed(1)} (recorded 59 and 56, guard band ±4)`);
+  console.log('  The claim is a steering fact, not a throughput lever: it takes the fleet apart on the REEF and leaves the');
+  console.log('  ledger where the record has it, because a machine that was going to arrive second still arrives second — it');
+  console.log('  just goes to a different pipe. What it buys is the drive the second machine no longer has to redo, and the');
+  console.log('  13 in of pipe between two allies instead of the same branch under both of them.');
+}
+
+// #127. A CAGE hold is an action with odds, not a done deal. The engine already rolled one number for every
+// completed action and then, for a CLIMB only, discarded the result: a machine could not come off a pipe it had
+// committed to. The roll now decides, and what a miss costs is the clock — the machine keeps the CAGE it claimed,
+// drops back to the carpet beside it and tries again, and §6.5 prices however far it got (DEEP 12, SHALLOW 6,
+// PARK 2). No source prints a hold rate: the manual sets no number, and a ledger cannot recover one either,
+// because an alliance that fell and re-hung before the whistle books the same three DEEP CAGEs. `climbRisk: false`
+// is the control on every row — the same draws, discarded — so each rate is the same 24 MATCHes, not a new batch.
+{
+  const trio = (rate, key) => (key ? PRESETS.find((p) => p.key === key).trio : SAMPLES).map((p) => ({ ...p, climbSuccess: rate }));
+  const arm = (profiles, sb, over = {}, opts = {}, stride = 977) => {
+    const a = { slips: 0, deep: 0, shallow: 0, park: 0, barge: 0, hung: 0, blue: [], red: [] };
+    for (let i = 0; i < N; i++) {
+      const g = playMatch({
+        seed: sb + i * stride, blueProfiles: profiles, redProfiles: profiles,
+        scenarioOverride: over, bluePolicyOpts: opts, redPolicyOpts: opts,
+      });
+      a.slips += (g.events || []).filter((e) => e.kind === 'slip').length;
+      for (const side of ['blue', 'red']) {
+        const b = g.final[side].barge;
+        a.deep += b.deep;
+        a.shallow += b.shallow;
+        a.park += b.park;
+        a.hung += b.deep + b.shallow;
+        a.barge += g.final[side].bargePoints;
+      }
+      a.blue.push(g.final.blue.total);
+      a.red.push(g.final.red.total);
+    }
+    const sides = 2 * N;
+    return { ...a, slips: a.slips / N, deep: a.deep / sides, shallow: a.shallow / sides, park: a.park / sides, hung: a.hung / sides, barge: a.barge / sides };
+  };
+  const paired = (a, b, seat) => {
+    const d = b[seat].map((v, i) => v - a[seat][i]);
+    const m = d.reduce((s, v) => s + v, 0) / d.length;
+    const se = Math.sqrt(d.reduce((s, v) => s + (v - m) ** 2, 0) / (d.length - 1) / d.length);
+    return `${(m >= 0 ? '+' : '') + m.toFixed(2)} ± ${se.toFixed(2)} (${d.filter((v) => v !== 0).length}/${d.length} differ)`;
+  };
+  const dsp = (x) => `${x.deep.toFixed(2)}/${x.shallow.toFixed(2)}/${x.park.toFixed(2)}`;
+  const SHIP127 = {};
+  label('#127 a CAGE hold that does not stick, n=24 mirror MATCHes per rate');
+  for (const sb of [9000, 21000]) {
+    const off = arm(trio(0.94), sb, { climbRisk: false });
+    console.log(`  base ${sb}  the roll discarded   DEEP/SHALLOW/PARK an ALLIANCE ${dsp(off)} · BARGE ${off.barge.toFixed(2)} · own-side 0 (the control)`);
+    for (const rate of [1, 0.97, 0.94, 0.9, 0.8, 0.5, 0.3]) {
+      const on = arm(trio(rate), sb, SHIP127);
+      console.log(`  base ${sb}  success ${rate.toFixed(2)}     ${on.slips.toFixed(2)} slips a MATCH · DEEP/SHALLOW/PARK ${dsp(on)} · BARGE ${on.barge.toFixed(2)} · own-side against the discarded roll ${paired(off, on, 'blue')}`);
+    }
+  }
+  // The same miss priced against the clock it lands in, because that is what decides whether it costs anything: a
+  // fleet told to commit with 6 s left has time to fall and re-hang, and a fleet that commits with 2 s does not.
+  label('#127 the same rate against the endgame window the fleet is told to commit with (n=24, seed base 9000, blue read)');
+  for (const w of [20, 6, 4, 2]) {
+    const off = arm(trio(0.94), 9000, { climbRisk: false }, { climbWindowSec: w });
+    const on = arm(trio(0.94), 9000, SHIP127, { climbWindowSec: w });
+    console.log(`  commit with ${String(w).padStart(2)} s left:  ${on.slips.toFixed(2)} slips a MATCH · DEEP/SHALLOW/PARK ${dsp(on)} against ${dsp(off)} · ${on.hung.toFixed(2)} of 3 hung against ${off.hung.toFixed(2)} · BARGE ${on.barge.toFixed(2)} against ${off.barge.toFixed(2)} · own-side ${paired(off, on, 'blue')}`);
+  }
+  const jOff = arm(trio(0.94, 'johnson'), 23000, { climbRisk: false }, {}, 613);
+  const jOn = arm(trio(0.94, 'johnson'), 23000, SHIP127, {}, 613);
+  const nOff = arm(trio(0.94, 'newton'), 23000, { climbRisk: false }, {}, 613);
+  const nOn = arm(trio(0.94, 'newton'), 23000, SHIP127, {}, 613);
+  console.log(`  the two named lineups the ledger is read against: Johnson ${dsp(jOff)} -> ${dsp(jOn)} and Newton ${dsp(nOff)} -> ${dsp(nOn)}, against three DEEP CAGEs recorded for each side (2025cmptx_f1m1)`);
 }

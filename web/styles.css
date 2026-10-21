@@ -114,6 +114,7 @@ code { font-family: var(--mono); font-size: 0.92em; color: var(--accent); }
   padding: 6px 10px; cursor: pointer; font-size: 12px; white-space: nowrap; margin-bottom: -1px;
 }
 .tab:hover { color: var(--text); }
+.btn.cancel, .chip.error { color: var(--warn); border-color: var(--warn); }
 .tab.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
 .tab-body { padding-top: 10px; }
 .tab-body h3 { margin: 16px 0 6px; font-size: 13px; }
@@ -298,9 +299,12 @@ body.fill .field-panel .panel-head { margin-bottom: 6px; }
 body.fill .field-panel #field-sub { display: none; }
 /* The detailed ledger is the two boxes under the transport bar. Like the hint line — and like the 2026
    page's legend, which is dropped for the same reason — it is a reading aid for the page, not part of the
-   picture, and the same six columns are on the Read-out rail the whole time. */
+   picture, and the same six columns are on the Read-out rail the whole time. The live REEF line under it
+   is the same kind of thing, so it goes with it. */
 .field-panel:fullscreen .score-detail,
-body.fill .field-panel .score-detail { display: none; }
+body.fill .field-panel .score-detail,
+.field-panel:fullscreen #rp-live,
+body.fill .field-panel #rp-live { display: none; }
 /* `flex-basis: 0`, not `auto`: with `auto` the wrap sizes to its content, the content is a canvas whose
    height is a percentage of the wrap, and the cycle resolves to the bitmap's own height — a picture taller
    than the panel, with the REEF and the BARGE running off the bottom of the screen. */
@@ -332,6 +336,11 @@ body.fill #field,
 /* The batch's two histograms. The `canvas` rule above sizes the FIELD by aspect ratio and it is an
    element selector, so a chart has to take its own box back or it inherits the field's 2:1 shape. */
 canvas.chart { width: 100%; height: 132px; aspect-ratio: auto; display: block; background: #0f1620; border: 1px solid var(--line); border-radius: 10px; margin: 2px 0; }
+/* The single-MATCH charts. The output panel is the container, so this asks the panel how wide it is, not the
+   window: at the ~510 px the in-app preview gives, six band rows still need the whole width to themselves. */
+.charts { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 6px 0 2px; }
+canvas.chart.tall { height: 176px; }
+@container (min-width: 820px) { .charts { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
 .rp-list { display: grid; gap: 8px; }
 .rp-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 8px; align-items: center; font-size: 12px; }
 .rp-row small { color: var(--dim); }

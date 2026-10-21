@@ -24,7 +24,7 @@ export const INTENT = {
 
 export const LEVELS = ['L1', 'L2', 'L3', 'L4'];
 const TICK = 0.1;
-const DECIDE_EVERY = 2; // a decision every 0.2 s, like the 2026 engine
+const DECIDE_EVERY = 2; // written to be a 0.2 s pass like the 2026 engine; the parity below makes it every tick
 const TICKS = Math.round(TIME.matchSec / TICK);
 
 // Same generator as the REBUILT build so a seed means the same stream of numbers in both games.
@@ -432,6 +432,8 @@ export function makeAlliance(profiles, side, geo) {
       pressSince: null, // #124's shorter version of the same test, run only while a REEF is on the line
       pressFrom: 0,
       press: false, // latched once the machine is found to be pressing against the structure: go around
+      branch: null, // { lv, idx, t }: the branch this machine is driving a CORAL to, so an ally aims another pipe
+      lastDecideT: 0, // the clock of the last decision, so the one after it knows how much time it covered
       unstickUntil: 0,
       stats: {
         placed: { L1: 0, L2: 0, L3: 0, L4: 0 },
@@ -447,7 +449,24 @@ export function makeAlliance(profiles, side, geo) {
         defendSec: 0,
         blockSec: 0,
         climbLevel: null,
+        slips: 0, // #127: climb attempts that did not stick, counted so the endgame column can be read apart from the clock
         fouls: {},
+        // #129 bookkeeping: where each piece came from, what the machine spent its seconds and its inches
+        // on, and the two ways a cycle ends with nothing in hand. None of it is a frame key, an event or a
+        // random draw, so the fingerprint ladder in scripts/invariants.mjs holds every arm it held before
+        // these lines existed — the recorded MATCHes replay identical with these counting.
+        pickedFrom: { station: 0, theirStation: 0, mark: 0, dropped: 0 },
+        strippedFrom: { reef: 0, mark: 0, dropped: 0 }, // the ring came off a BRANCH, off a MARK, or off the carpet
+        pickMisses: 0, // a grab that finished and the piece was already gone, or the corner was empty
+        heldSec: 0, // seconds spent within reach of a piece it could not get to, driving alongside it
+        // Two different failures, because they are two different fixes. `fullSec` is a level that filled and
+        // the fleet kept aiming at it — a routing problem, priced in seconds. `fullMiss` is an arm that
+        // finished and found the branch it drove to gone — a booking race, priced in actions.
+        fullSec: { L1: 0, L2: 0, L3: 0, L4: 0 },
+        fullMiss: { L1: 0, L2: 0, L3: 0, L4: 0 },
+        busySec: { 'fetch-coral': 0, 'strip-algae': 0, place: 0, process: 0, 'score-net': 0, climb: 0, defend: 0 },
+        movedIn: { 'fetch-coral': 0, 'strip-algae': 0, place: 0, process: 0, 'score-net': 0, climb: 0, defend: 0, idle: 0 },
+        distance: 0,
       },
     };
   });
@@ -479,8 +498,9 @@ function makeState({ blueProfiles, redProfiles, scenario: raw }) {
   const floor = [];
   for (const side of ['blue', 'red']) {
     // `rot` is only for the replay: a CORAL is an 11 in pipe, so it lies some way, and the marks are
-    // staged across their own axis (§6.3.4.1 A).
-    coralMarks(geo, side).forEach((m, i) => floor.push({ kind: 'coral', x: m.x, y: m.y, side, taken: false, rot: i * 60 }));
+    // staged across their own axis (§6.3.4.1 A). `from` is only for the ledger: it tells the pick site
+    // that this piece was put on the FIELD by the staging, not dropped there by a missed placement.
+    coralMarks(geo, side).forEach((m, i) => floor.push({ kind: 'coral', x: m.x, y: m.y, side, taken: false, rot: i * 60, from: 'mark' }));
   }
   // ALGAE: §6.3.4.2 stages 18 for the MATCH, 6 on each REEF in three two-piece positions (A) and 1 on
   // top of the CORAL at each CORAL MARK (B), so an ALLIANCE has 9 pieces it can take off its own REEF
@@ -544,6 +564,10 @@ function makeState({ blueProfiles, redProfiles, scenario: raw }) {
     // rule in `policy.js` is priced on this, and the planner reads it live rather than assuming the fleet is
     // crowded. See SPREAD_SEC in `fastsim.js`.
     contest: { blue: { picks: 0, contested: 0 }, red: { picks: 0, contested: 0 } },
+    // #126: how many 0.1 s decisions two allies of one ALLIANCE aimed the SAME branch on the same level, and how
+    // many stretches of that happened. The claim is `rb.branch`; without a count the only way to see the jostle
+    // is to record 750 frames per MATCH, which `npm run measure` cannot afford for every arm.
+    branchShare: { blue: { dup: 0, episodes: 0, was: false }, red: { dup: 0, episodes: 0, was: false } },
     // The two deny actions, counted where they happen: a CORAL taken out of the OPPONENT's STATION, and an
     // ALGAE stripped off their REEF. Both are legal and both are invisible in the score column — the piece
     // simply never arrives in their ledger — so without this the page cannot say whether the option was ever
@@ -583,21 +607,69 @@ function freeSlots(st, side, lv) {
 
 // Which branch a CORAL goes onto is chosen by proximity, so the drive to an open slot is part of the
 // cycle cost. §5.3: six faces, two pipes per face 13 in apart, one branch of each level per pipe.
-function freeSlotNear(st, side, lv, x, y) {
+function freeSlotNear(st, side, lv, x, y, avoid) {
   if (lv === 'L1') return st.reef[side].trough.count < st.reef[side].trough.cap ? -1 : null;
   const slots = st.reef[side][lv];
   const pos = st.slots[side];
   let best = null;
   let bestD = Infinity;
+  let any = null;
+  let anyD = Infinity;
   for (let i = 0; i < slots.length; i++) {
     if (slots[i]) continue;
     const d = hypot(x, y, pos[i].x, pos[i].y);
-    if (d < bestD) {
-      bestD = d;
-      best = i;
-    }
+    // The fallback is the nearest free branch whether or not an ally is aimed at it. Every branch of the
+    // level being claimed is a full REEF, and a machine that refuses to place there stops scoring.
+    if (d < anyD) { anyD = d; any = i; }
+    if (avoid && avoid.has(i)) continue;
+    if (d < bestD) { bestD = d; best = i; }
   }
-  return best;
+  return best === null ? any : best;
+}
+
+// Which branches of this level another machine of the same ALLIANCE is already driving to. The engine books a
+// branch only when the placement completes, so without this the three machines bid the same nearest free pipe
+// from wherever they came off the STATION; `npm run verify` prints how many ROBOT-seconds an ALLIANCE-MATCH goes
+// to that duplicate claim with the ablation on and off. The one that lost the race had to re-aim. A machine that
+// has already been aimed at a branch keeps it against a machine that decided later, which is what stops the pair
+// from trading places every 0.1 s; the tie is broken by SLOT so it is still one decision, not a coin.
+// `branchDedup: false` is the ablation.
+function branchAvoid(st, rb, lv, prior) {
+  if (lv === 'L1' || st.scenario.branchDedup === false) return null;
+  const out = new Set();
+  for (const o of st.robots[rb.side]) {
+    if (o.slot === rb.slot || o.coral < 1) continue;
+    if (o.busy && o.busy.kind === INTENT.PLACE && o.busy.level === lv && o.busy.idx >= 0) {
+      out.add(o.busy.idx);
+      continue;
+    }
+    const c = o.branch;
+    if (!c || c.lv !== lv || c.idx === null) continue;
+    if (c.t < prior || (c.t === prior && o.slot < rb.slot)) out.add(c.idx);
+  }
+  return out;
+}
+
+// One count per decision tick, and every tick of this engine is a decision tick (see the loop above), so the clock
+// is 0.1 s. `dup` is allies BEYOND the first on a branch, which makes `dup × 0.1` ROBOT-seconds of an ALLIANCE-MATCH
+// aimed at a pipe somebody else had claimed first — not wall-clock seconds of the MATCH being stacked. `episodes`
+// counts the stretches that began.
+function countBranchShare(st) {
+  for (const side of ['blue', 'red']) {
+    const b = st.branchShare[side];
+    const seen = new Set();
+    let dup = 0;
+    for (const rb of st.robots[side]) {
+      const c = rb.branch;
+      if (!c || c.idx === null || rb.coral < 1) continue;
+      const key = `${c.lv}:${c.idx}`;
+      if (seen.has(key)) dup += 1;
+      else seen.add(key);
+    }
+    b.dup += dup;
+    if (dup && !b.was) b.episodes += 1;
+    b.was = dup > 0;
+  }
 }
 
 function placeCoral(st, rb, lv, idx, aimErr) {
@@ -713,6 +785,8 @@ function stepRobot(st, rb, dt) {
   const vy0 = rb.vy;
   rb.vx += clamp(fwd * cosH - lat * sinH - rb.vx, -maxDelta, maxDelta);
   rb.vy += clamp(fwd * sinH + lat * cosH - rb.vy, -maxDelta, maxDelta);
+  const px0 = rb.x;
+  const py0 = rb.y;
   rb.x += rb.vx * dt;
   rb.y += rb.vy * dt;
 
@@ -723,6 +797,16 @@ function stepRobot(st, rb, dt) {
     rb.x = clamp(rb.x, half, FIELD.longIn - half);
     rb.y = clamp(rb.y, half, FIELD.wideIn - half);
     reefResolve(st, rb);
+  }
+  // Inches are measured after the structure has had its say, so a machine pinned against the REEF accrues
+  // nothing — which is the point of the column. They are charged to the action it is performing (a busy
+  // ROBOT is working an element, not driving), and that is what makes "96 ft going and coming back for
+  // CORAL" readable apart from "14 ft of it while pinned".
+  const moved = Math.hypot(rb.x - px0, rb.y - py0);
+  if (moved > 0) {
+    const leg = rb.busy ? rb.busy.kind : rb.intent || 'idle';
+    rb.stats.distance += moved;
+    rb.stats.movedIn[leg] = (rb.stats.movedIn[leg] || 0) + moved;
   }
 
   // A CORAL held against a REEF branch, or out on a field where the driver is standing on the throttle, comes
@@ -924,7 +1008,9 @@ function dropHere(st, rb, kind) {
     }
   }
   // A CORAL is an 11 in pipe, so it lies some way; an ALGAE is a 16 in ring, so it rolls to a rest.
-  st.floor.push({ kind, x: dx, y: dy, side: rb.side, taken: false, rot: Math.round(st.rng() * 180) });
+  // `from` is the ledger tag: a piece that got here by being dropped is not the same as one the staging
+  // put down, and the second pick of it is a machine cleaning up after the first.
+  st.floor.push({ kind, x: dx, y: dy, side: rb.side, taken: false, rot: Math.round(st.rng() * 180), from: 'drop' });
 }
 
 // The chance that a placement does not stay on the REEF, read off the level and off how far off-face the
@@ -960,10 +1046,12 @@ function stepGrab(st, rb) {
   const isGrab = (b.kind === INTENT.FETCH_CORAL || b.kind === INTENT.STRIP_ALGAE) && b.piece;
   if (isGrab && b.at && hypot(rb.x, rb.y, b.at.x, b.at.y) > GRAB_BREAK_IN) {
     b.held = (b.held || 0) + TICK;
+    rb.stats.heldSec += TICK;
     if (b.held > b.sec) { rb.busy = null; rb.faceDeg = null; }
     return true;
   }
   b.t += TICK;
+  rb.stats.busySec[b.kind] = (rb.stats.busySec[b.kind] || 0) + TICK;
   if (b.t >= b.sec) finishBusy(st, rb);
   return true;
 }
@@ -977,9 +1065,29 @@ function finishBusy(st, rb) {
   // A PLACE gets a different number to compare against when the placement model is on, but the same single
   // draw and the same comparison: that is what lets `placementRisk: false` reproduce the replay committed
   // before the model existed, rather than a replay with the same average and a different roll order.
-  const ok = b.kind === INTENT.PLACE && st.scenario.placementRisk ? 1 - placeMissP(rb, b) : rb.profile.reliability;
+  // A CLIMB gets a third number, and this is where #127 was: the draw always happened and its result was
+  // thrown away for a climb, so a CAGE hold could not fail. `climbRisk: false` puts that back on purpose —
+  // same single draw, same comparison, so the off value hands back the replay committed before this existed.
+  const ok = b.kind === INTENT.PLACE && st.scenario.placementRisk
+    ? 1 - placeMissP(rb, b)
+    : b.kind === INTENT.CLIMB && st.scenario.climbRisk
+      ? rb.profile.climbSuccess ?? 1
+      : rb.profile.reliability;
   const flub = st.rng() > ok;
+  if (flub && b.kind === INTENT.CLIMB && st.scenario.climbRisk) {
+    // The machine loses the pipe and comes down beside it. It keeps the CAGE it claimed and re-decides, which
+    // is what a driver does with seconds on the clock; with none left it is a ROBOT inside its own BARGE ZONE
+    // and not on a CAGE, and §6.5 reads that as a PARK. Nothing it carries is shaken loose: the piece a
+    // successful hang lets go of is let go when the hang happens.
+    rb.stats.slips += 1;
+    st.events.push({ t: st.t, kind: 'slip', side: rb.side, slot: rb.slot, deep: !!b.deep, cage: b.cage });
+    rb.busy = null;
+    rb.faceDeg = null;
+    return;
+  }
   if (flub && b.kind !== INTENT.CLIMB) {
+    // A CLIMB that flubbed with the model switched off hangs anyway: that discarding of the draw is what the
+    // engine did before #127, and the off value has to keep doing it or the ablation is a re-roll, not a switch.
     if (b.kind === INTENT.PLACE && st.scenario.placementRisk) {
       // A missed placement shakes loose the piece being put away, not the ring in the other hand: G409 lets
       // the ROBOT hold one of each, and the arm that missed is the one that was holding the CORAL.
@@ -1020,6 +1128,13 @@ function finishBusy(st, rb) {
         b.piece.taken = true;
         rb.coral += 1;
         rb.stats.picked += 1;
+        // A MARK piece is one the staging put on the FIELD and nobody has handled; a dropped one is a
+        // piece some machine lost, so the second ALLIANCE to pick it up is cleaning up after the first.
+        rb.stats.pickedFrom[b.piece.from === 'mark' ? 'mark' : 'dropped'] += 1;
+      } else {
+        // The grab ran its whole clock and the pipe was not there at the end of it: an ally or an
+        // opponent got there first. It costs a cycle and the score does not show either.
+        rb.stats.pickMisses += 1;
       }
     } else if (b.stationIdx !== null && b.stationIdx !== undefined) {
       const ss = b.stationSide || rb.side;
@@ -1029,7 +1144,8 @@ function finishBusy(st, rb) {
         q.feedReadyAt = st.t + st.scenario.humanPlayer[ss].feedSec; // [estimate] CHUTE feed per station
         rb.coral += 1;
         rb.stats.picked += 1;
-      }
+        rb.stats.pickedFrom[ss === rb.side ? 'station' : 'theirStation'] += 1;
+      } else rb.stats.pickMisses += 1;
     }
   } else if (b.kind === INTENT.STRIP_ALGAE) {
     const a = b.piece;
@@ -1037,9 +1153,15 @@ function finishBusy(st, rb) {
       a.taken = true;
       rb.algae += 1;
       rb.stats.strips += 1;
-    }
+      // `where` is set on the 18 rings the staging put on a REEF or a MARK; a ring with none of those is
+      // one that came off a PROCESSOR or a missed placement and is lying on the carpet.
+      rb.stats.strippedFrom[a.where === 'reef' ? 'reef' : a.where === 'mark' ? 'mark' : 'dropped'] += 1;
+    } else if (a) rb.stats.pickMisses += 1;
   } else if (b.kind === INTENT.PLACE) {
-    placeCoral(st, rb, b.level, b.idx, b.aimErr);
+    // The branch it drove to can be gone by the time the arm finishes: an ally booked it, or the whole level
+    // filled. The CORAL stays in the hopper and the machine re-decides, and this is the cycle the score
+    // never mentions — a full action with nothing to show for it.
+    if (!placeCoral(st, rb, b.level, b.idx, b.aimErr)) rb.stats.fullMiss[b.level] += 1;
   } else if (b.kind === INTENT.PROCESS) {
     if (rb.algae > 0) {
       rb.algae -= 1;
@@ -1450,8 +1572,30 @@ function scoreSide(st, side) {
     coopertition: coop ? POINTS.coopertition : 0,
     total: coralPoints + algaePoints + leave + bargePoints,
     rp: { auto: autoRp ? POINTS.rp.auto : 0, coral: coralRp ? POINTS.rp.coral : 0, barge: bargeRp ? POINTS.rp.barge : 0, win: 0, tie: 0 },
+    // Which of the two ways an ALLIANCE leaves with the CORAL or BARGE RP: its own tally, or a MAJOR foul the
+    // opponent committed under G410/G418/G428 (§7.4). The bars printed on the page are the same bars either
+    // way, so without this the batch's "BARGE RP 62%" cannot be answered with "and 9 points of it were gifts"
+    // — and `scripts/rp.mjs` grades every MATCH twice from these flags and the tallies to prove the two paths
+    // are not being conflated. Nothing here changes what is scored: it is the same `st.rpAward` the RP above
+    // already read, exported.
+    rpAward: { coral: !!st.rpAward[side].coral, barge: !!st.rpAward[side].barge },
     autoCoral,
-    robots: robots.map((r) => ({ slot: r.slot, team: r.team, name: r.name, tempo: +(r.profile.tempoFactor ?? 1).toFixed(2), placed: r.stats.placed, dropped: r.stats.dropped, carryDropped: r.stats.carryDropped, processor: r.stats.processor, netScored: r.stats.netScored, picked: r.stats.picked, strips: r.stats.strips, defend: +r.stats.defendSec.toFixed(1), blocked: +r.stats.blockSec.toFixed(1), yellow: r.yellow, climb: r.climb ? r.climb.level : null, climbCage: r.climb ? r.climb.cage : null, left: r.left, disabled: r.disabled, fouls: r.stats.fouls, x: r.x, y: r.y })),
+    robots: robots.map((r) => ({
+      slot: r.slot, team: r.team, name: r.name, tempo: +(r.profile.tempoFactor ?? 1).toFixed(2),
+      placed: r.stats.placed, dropped: r.stats.dropped, carryDropped: r.stats.carryDropped,
+      processor: r.stats.processor, netScored: r.stats.netScored, picked: r.stats.picked, strips: r.stats.strips,
+      defend: +r.stats.defendSec.toFixed(1), blocked: +r.stats.blockSec.toFixed(1),
+      yellow: r.yellow, climb: r.climb ? r.climb.level : null, climbCage: r.climb ? r.climb.cage : null,
+      slips: r.stats.slips, left: r.left, disabled: r.disabled, fouls: r.stats.fouls, x: r.x, y: r.y,
+      // #129: the cycle ledger. Seconds and feet are rounded here because that is all the page shows and
+      // this object is also what the export file writes.
+      pickedFrom: r.stats.pickedFrom, strippedFrom: r.stats.strippedFrom, pickMisses: r.stats.pickMisses,
+      heldSec: +r.stats.heldSec.toFixed(1), fullMiss: r.stats.fullMiss,
+      fullSec: Object.fromEntries(LEVELS.map((lv) => [lv, +r.stats.fullSec[lv].toFixed(1)])),
+      busySec: Object.fromEntries(Object.entries(r.stats.busySec).map(([k, v]) => [k, +v.toFixed(1)])),
+      movedFt: Object.fromEntries(Object.entries(r.stats.movedIn).map(([k, v]) => [k, +(v / 12).toFixed(1)])),
+      droveFt: +(r.stats.distance / 12).toFixed(1),
+    })),
   };
 }
 
@@ -1481,8 +1625,11 @@ export function simulateMatch({ blueProfiles, redProfiles, bluePolicy, redPolicy
       }
       lastPeriod = period;
     }
-    // Serve order flips every tick, and the decision parity flips with it: both alliances get the
-    // first claim on a contested piece half the time, and each ROBOT re-decides every 0.2 s.
+    // Serve order flips every tick, so each ALLIANCE gets the first claim on a contested piece half the time.
+    // The decision parity below was written to make each ROBOT re-decide every 0.2 s; because `decideFlip` is
+    // inverted on the same parity it is compared against, `decideOn` is true on every tick and a machine
+    // really does re-decide every 0.1 s. That is the cadence the shipped fingerprints were timed through, so
+    // it is left as it is and `applyIntent` measures its seconds off the clock instead of off this line.
     const sides = tick % 2 === 0 ? ['blue', 'red'] : ['red', 'blue'];
     const decideOn = tick % DECIDE_EVERY === (decideFlip ? 1 : 0);
     for (const side of sides) {
@@ -1499,6 +1646,7 @@ export function simulateMatch({ blueProfiles, redProfiles, bluePolicy, redPolicy
       }
     }
     decideFlip = !decideFlip;
+    if (decideOn) countBranchShare(st); // before the steering moves anyone, on the claims this decision set
     for (const side of sides) {
       for (const rb of st.robots[side]) stepRobot(st, rb, TICK);
     }
@@ -1582,6 +1730,7 @@ export function simulateMatch({ blueProfiles, redProfiles, bluePolicy, redPolicy
   for (const s of [blue, red]) s.rp.total = s.rp.auto + s.rp.coral + s.rp.barge + s.rp.win + s.rp.tie;
   return {
     final: { blue, red },
+    branchShare: st.branchShare,
     stock,
     foulLog: { blue: st.fouls.blue, red: st.fouls.red },
     // Every §7.4.4 candidate collision's severity, in in/s-of-impact scaled by the weight ratio, logged
@@ -1597,12 +1746,20 @@ function applyIntent(st, rb, want, obs) {
   // The unstick maneuver owns the steering for its own 0.8 s: a fresh decision issued in the middle of backing
   // out of a pile-up would point the ROBOT straight back at it.
   if (st.t < rb.unstickUntil) return;  const p = rb.profile;
+  // How much clock this decision covers, so a seconds column can be timed off the clock rather than off an
+  // assumed cadence. `decideOn` reads as if it gated decisions to every 0.2 s, but `decideFlip` is inverted
+  // on the same parity it is compared against, so the gate is open on every tick and a decision really does
+  // come every TICK. That is recorded here rather than fixed, because the shipped fingerprints are timed
+  // through that gate: moving it is an engine change, not a ledger one.
+  const sinceLast = st.t - rb.lastDecideT;
+  rb.lastDecideT = st.t;
   const mode = want.mode;
   rb.intent = mode || null; // the replay panel shows what each ROBOT decided, not just where it is
   // The facing requirement is cleared every decision and re-armed by the two work modes that need it,
   // so a ROBOT that gives up on a placement does not keep pointing at the branch while it drives away.
   rb.faceDeg = null;
   rb.defending = null; // re-armed below only by a DEFEND decision, so §7.4.4's "deliberate" is never stale
+  if (mode !== INTENT.PLACE) rb.branch = null; // a branch claim is only a claim while it is still driving there
   if (mode === INTENT.IDLE || !mode) {
     rb.target = want.target || null;
     return;
@@ -1671,9 +1828,19 @@ function applyIntent(st, rb, want, obs) {
   }
   if (mode === INTENT.PLACE) {
     const lv = want.level || 'L4';
-    if (rb.coral < 1) return;
-    const idx = freeSlotNear(st, rb.side, lv, rb.x, rb.y);
-    if (idx === null) return; // that level is full; the policy picks another or goes for ALGAE
+    if (rb.coral < 1) { rb.branch = null; return; }
+    // The claim's age is what makes the yield one-way: keep it while this machine still wants the same level,
+    // and start a fresh one the moment it switches levels.
+    if (!rb.branch || rb.branch.lv !== lv) rb.branch = { lv, idx: null, t: st.t };
+    const idx = freeSlotNear(st, rb.side, lv, rb.x, rb.y, branchAvoid(st, rb, lv, rb.branch.t));
+    if (idx === null) {
+      // The level this machine is holding a CORAL for has no room left, and it will ask again on the next
+      // decision having moved nowhere. Priced in the clock the ask actually covered — a routing failure,
+      // not a booking race, and the fix is a different level rather than a faster arm.
+      rb.stats.fullSec[lv] += sinceLast;
+      return; // that level is full; the policy picks another or goes for ALGAE
+    }
+    rb.branch.idx = idx >= 0 ? idx : null;
     // G412: CORAL may only be launched with the BUMPERS inside the ALLIANCE'S own REEF ZONE. Placement
     // is modelled from the branch itself, so a ROBOT outside the zone steers in rather than fouling.
     const zone = st.geo[rb.side].reefZone;
@@ -1770,7 +1937,7 @@ function applyIntent(st, rb, want, obs) {
   // (§5.5, §6.1), and G433B keeps ALGAE entry on the HUMAN PLAYER's side of that wall.
   if (mode === INTENT.CLIMB) {
     const cages = st.geo[rb.side].cages.map((c, i) => ({ i, c, deep: st.scenario.cageDepth[rb.side][i], used: st.cageClaim[rb.side][i], d: hypot(rb.x, rb.y, c.x, c.y) }));
-    // A ROBOT holds onto the CAGE it already claimed: three climbers deciding in the same 0.2 s window
+    // A ROBOT holds onto the CAGE it already claimed: three climbers deciding in the same 0.1 s window
     // would otherwise each see the same free pipe and pile onto it. The claim is taken when it starts
     // driving, not when it hangs, because the queue is what has to be spread.
     let mine = rb.climbCage === null || rb.climbCage === undefined ? null : cages.find((x) => x.i === rb.climbCage);
@@ -1795,7 +1962,7 @@ function applyIntent(st, rb, want, obs) {
     return;
   }
   // DEFEND: stand between an opponent and where it is going. There is no timer on it — a drive team holds a
-  // press for as long as it keeps the car in front of the other one, so this re-decides every 0.2 s like any
+  // press for as long as it keeps the car in front of the other one, so this re-decides every 0.1 s like any
   // other trip — and there is no points column for it either. What it buys is geometry: two 30 in boxes and a
   // REEF ZONE the opponent has to get around. What it costs is the cycle this machine is not doing, G421 if a
   // second ALLIANCE ROBOT crosses with it, and G427 the moment it touches somebody inside their own zone —

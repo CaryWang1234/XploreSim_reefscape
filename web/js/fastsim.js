@@ -294,7 +294,7 @@ export function estimateAlliance(ctx, plan, opts = {}) {
     const coralBid = legs ? legs.out / CORAL_BID_VALUE : Infinity;
     const algaeBid = algaeRoom ? aLegs.bid / aLegs.value : Infinity;
     // A cycle is only worth starting if it finishes before the commit window, because the drive to the source
-    // is not a committed action: the engine re-decides every 0.2 s while a ROBOT is moving, so the instant the
+    // is not a committed action: the engine re-decides every 0.1 s while a ROBOT is moving, so the instant the
     // window opens the machine turns around and goes for a CAGE, and the CORAL it was chasing is never picked
     // up. What it costs to be interrupted is measurable rather than guessed — over 12 MATCHes at a 6 s window
     // the fleet asked at t=144.1 (max 144.5) and took 4.81 s (max 5.80) to get ON the pipe, ending with 1.83 DEEP,

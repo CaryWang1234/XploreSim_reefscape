@@ -128,7 +128,7 @@ for (const base of BASES) {
 
 // The tail, measured rather than estimated. `fastsim.js` prices a climb from the REEF face and deliberately
 // does NOT apply the fitted traffic factor to that leg; the claim it rests on is that interrupting a drive
-// costs nothing, because the engine re-decides every 0.2 s while a ROBOT is moving. This is the number that
+// costs nothing, because the engine re-decides every 0.1 s while a ROBOT is moving. This is the number that
 // says so: when the fleet asks to climb, how long to the pipe, and what the BARGE column ends up worth at
 // each window. If an early commit ever starts costing CAGE points, the model's window ranking is wrong and
 // the planner is choosing the endgame off a broken lever.

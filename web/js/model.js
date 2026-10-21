@@ -171,7 +171,7 @@ export const TROUGH_CAP = 24;
 // `[estimate]` How often a held CORAL is shaken onto the carpet by the drive itself — a hard launch, a hard
 // stop, a corner taken at full throttle. The manual scores a piece that is not held by §6.5.1's geometry and
 // never describes how it came to be loose, so this is the sweep's answer, not a clause: `npm run measure` reads
-// 2.42 CORAL a MATCH loose this way across the six machines at 0.01, 1.08 at 0.005 and 3.83 at 0.02, and the
+// 2.04 CORAL a MATCH loose this way across the six machines at 0.01, 0.83 at 0.005 and 3.46 at 0.02, and the
 // three rates price within one another's error bars, so the row that decides is how many pieces a MATCH can be
 // seen to lose. `0` spends no random number and is the engine as it was.
 export const CARRY_DROP_PER_SEC = 0.01;
@@ -291,6 +291,14 @@ export const SAMPLES = [
     intake: 'front',
     canClimbDeep: true,
     climbSec: 2.1,
+    // `[estimate]` the chance that a climb attempt actually sticks. §6.5.2 gives CAGE points only to a ROBOT
+    // contacting one and only one of its ALLIANCE's CAGES and not contacting the carpet, and PARK only to one whose
+    // BUMPERS are in the BARGE ZONE without a CAGE, so the endgame is a hold on a 2 ft × 7 in box of four 1 in pipes
+    // (§5.4.1) — and Table 6-2 prices the difference between holding and not at 12, 6, or 2. The manual prints no
+    // rate, and a ledger cannot report one either: an alliance that fell and re-hung before the assessment books the
+    // same three DEEP CAGEs. The engine used to roll this number and throw the result away, so no climb ever failed.
+    // 1 is the ablation the guards read, and it is the engine as it was.
+    climbSuccess: 0.94,
     netScoreSec: 1.9, // its own L4 (1.4 s) plus 0.5 s of height and ring; see the note above SAMPLES
     // `[estimate]` §6.4: AUTO is a scripted routine, so how many CORAL it spends is a property of the ROBOT
     // and its code, not of the driver. TBA's 2025cmptx alliances averaged 9 AUTO CORAL, 7 on L4 — about three
@@ -317,6 +325,7 @@ export const SAMPLES = [
     intake: 'front',
     canClimbDeep: false,
     climbSec: 1.6,
+    climbSuccess: 0.94, // the rate is the machine's, not the CAGE's: no source separates a hold in a low cage from one in a high cage
     netScoreSec: 1.4, // its L4 is 0.9 s, so the border is the same 0.5 s above it
     autoCycles: 3,
     reliability: 0.96,
@@ -339,6 +348,7 @@ export const SAMPLES = [
     intake: 'front',
     canClimbDeep: true,
     climbSec: 1.3,
+    climbSuccess: 0.97, // the role's own advantage, in the same `[estimate]` column as its 1.3 s climb
     netScoreSec: 2.05, // the slowest arm in the file: its L4 is 1.55 s
     autoCycles: 2,
     reliability: 0.95,
@@ -361,6 +371,10 @@ export function scaleProfile(p, slow) {
     // landing a CORAL on a branch carry through untouched and get their own copy so an edit on the card
     // cannot reach back into SAMPLES.
     placeDrop: { ...(p.placeDrop ?? { L1: 0, L2: 0, L3: 0, L4: 0 }) },
+    // A rate is not a clock, and a climb rate is not a claim about the machine's tempo: a faster ascent is
+    // `climbSec`, holding it once you are there is `climbSuccess`. It carries through untouched, with its own
+    // copy so an edit on the card cannot reach back into SAMPLES.
+    climbSuccess: p.climbSuccess ?? 1,
     pickSec: p.pickSec * slow,
     algaeStripSec: p.algaeStripSec * slow,
     climbSec: p.climbSec * slow,
@@ -526,7 +540,7 @@ export const ROBOT_PRESETS = [
 // different machine and the card should stop claiming to be somebody else's.
 const PRESET_MATCH_KEYS = [
   'driveSpeedIps', 'turnRateDegS', 'accelIpsS', 'weightLb', 'pickSec', 'algaeStripSec',
-  'climbSec', 'netScoreSec', 'autoCycles', 'reliability', 'chassis', 'canClimbDeep', 'placeTolDeg',
+  'climbSec', 'climbSuccess', 'netScoreSec', 'autoCycles', 'reliability', 'chassis', 'canClimbDeep', 'placeTolDeg',
 ];
 
 export function presetIndexOf(p) {
@@ -561,8 +575,11 @@ export const HUMAN_PLAYER = {
 export function defaultScenario() {
   return {
     seed: 1,
-    objective: 'rs',
-    event: 'regional',
+    // No `objective` and no `event` key here, unlike the 2026 build's scenario. Both were dead: nothing in
+    // `engine.js`, `policy.js`, `ai.js` or any committed script reads either one, and the second has no rule
+    // to hold — Table 6-2's footnote says the CORAL and BARGE RP bars "may increase" at District/Championship
+    // and prints no other number, so a selector would grade a MATCH against a value nobody published. The
+    // knob the 2025 manual does give is `playoff` below, which is the page's "Qualification scoring" box.
     cageDepth: { blue: [true, false, true], red: [true, false, true] }, // §6.3.5 team choice, per MATCH
     autoWinner: null, // no sitting-out in 2025; both alliances play all three ROBOTS
     algaeInNetByHuman: true, // §6.1: the HUMAN PLAYER's half of the NET — a ROBOT with the reach scores there too, and that is `netScoreSec`
@@ -600,16 +617,29 @@ export function defaultScenario() {
     detourClearIn: 8,
     // ...and how long a machine has to be pressing before it is told to go around, in seconds of closing less
     // than 1.5 in on the same waypoint with a hexagon on the line. `0` diverts every blocked trip instead, which
-    // is the arm `npm run measure` prices: it takes the pinned-and-blocked share to 0.04% and two CORAL an
-    // ALLIANCE off the named presets' throughput, because a fleet working its own REEF has a hexagon on the
-    // line almost always. 0.6 catches the machines that actually stick, costs nothing on those same columns,
-    // and stays under the 3 s the pile-up test counts. `[estimate]`, swept.
+    // is the arm `npm run measure` prices: it takes the pinned-and-blocked share to 0.33% and nearly three CORAL
+    // an ALLIANCE off the named preset's throughput (Johnson 55.0 against the shipped 57.9), because a fleet
+    // working its own REEF has a hexagon on the line almost always. 0.6 catches the machines that actually stick
+    // (0.49%, 1.9 episodes a MATCH, longest 9.2 s), costs nothing on that same column, and stays under the 3 s
+    // the pile-up test counts. `[estimate]`, swept.
     detourPressSec: 0.6,
     // #125: `[estimate]` how often a CORAL shaken loose by hard driving lands on the carpet, per second of it.
     // The manual bills a piece that falls (§6.5.1 counts only a BRANCH inside the volume of the CORAL) and never
     // says how it came to fall, so the rate is set on a sweep over what a MATCH can visibly afford, not on a
     // rule. 0 spends no random number and is the pre-fix engine and the page's off value.
     carryDrop: CARRY_DROP_PER_SEC,
+    // #126: a branch is claimed by the machine that started driving to it first, so the second ally bids the
+    // next pipe instead of arriving to find its branch taken. The engine books a branch only when the placement
+    // completes, so before this all three machines took the same nearest free branch from wherever they came
+    // off the STATION: `npm run measure` counts 27.3 ROBOT-seconds an ALLIANCE-MATCH (greedy, base 9000) spent
+    // aimed at a pipe another ally already had against 9.3 with the claim, and 23.7 against 9.7 for the planner.
+    // `false` is the ablation, and it is worth no points either way — the claim is a steering fact.
+    branchDedup: true,
+    // #127: a climb can miss. Each ROBOT's own `climbSuccess` is rolled when the ascent finishes, and a miss
+    // leaves it on the carpet beside the pipe it claimed, still able to try again while the clock runs — and
+    // reading as a PARK under §6.5 when it does not. `false` rolls the number and ignores it, which is the
+    // engine that never dropped a CAGE, and it is the value `npm run verify` pins the replay on.
+    climbRisk: true,
     // The placement model in engine.js: a CORAL only counts when §6.5.1's geometry is satisfied — the BRANCH
     // inside the volume of the CORAL — and a piece pushed in off-axis does not satisfy it, so it falls. Off
     // is the ablation and the control, and it is the engine that produced the replay committed before this

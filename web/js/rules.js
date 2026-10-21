@@ -163,6 +163,15 @@ export const POINTS = {
   bargeRpThreshold: 16, // Table 6-2
   autoRpMinCoral: 1, // Table 6-2
   coopMinAlgaePerProcessor: 2, // §6.5.3
+  // Those four bars are ONE column, on purpose. The Table 6-2 footnote reads: "*For District Championship
+  // and/or FIRST Championship events, the CORAL or BARGE RP requirement may increase" — and prints no other
+  // number. The 2026 manual's Table 6-5 does print a district CHAMPIONSHIP column next to the regional one,
+  // so that build has an event selector and this one must not fake one: a knob whose values nobody published
+  // would grade a MATCH against an invention. Every place the bars appear on the page — the batch's RP legend,
+  // the live RP ladder, the Rule sources table — is spelled out of these constants, because the legend used to
+  // carry its own numbers and read "≥3 CORAL placed in AUTO", "4 CORAL at each of L2-L4" and "≥12 BARGE
+  // points" while the engine graded 1, 7 on each of four levels (three with Coopertition) and 16.
+  // `scripts/rp.mjs` recomputes every RP from these numbers and compares with the engine, MATCH by MATCH.
 };
 
 // ---------------------------------------------------------------------------
