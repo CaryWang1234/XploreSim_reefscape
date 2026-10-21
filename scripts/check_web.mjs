@@ -128,5 +128,48 @@ for (const name of fs.readdirSync(path.join(ROOT, 'scripts'))) {
   }
 }
 
+// This round's RP contract. The batch legend is five rows of prose beside five bars, and it spent a while
+// claiming "≥3 CORAL placed in AUTO", "4 CORAL at each of L2-L4" and "≥12 BARGE points" — three numbers that
+// are not in Table 6-2 and not what `engine.js` grades (1, 7 on each of four levels or three with Coopertition,
+// and 16). So: the array may not contain a digit outside an interpolation, it must name the four constants, and
+// `scripts/rp.mjs` — which regrades every MATCH of a batch out of `POINTS` and compares with the engine — has
+// to stay wired into `npm run validate`. The gift path is checked the same way: `engine.js` exports `rpAward`
+// and the Numbers row reads it, because a BARGE RP the opponent handed over and one the CAGEs earned both
+// printed as `1`.
+{
+  const ui = fs.readFileSync(path.join(ROOT, JS_DIR, 'ui.js'), 'utf8');
+  const eng = fs.readFileSync(path.join(ROOT, JS_DIR, 'engine.js'), 'utf8');
+  const pkg = fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8');
+  const audit = fs.readFileSync(path.join(ROOT, 'scripts', 'rp.mjs'), 'utf8');
+  const block = ui.match(/const rpRows = \[[\s\S]*?\n  \];/)?.[0];
+  if (!block) fail('ui.js no longer has the batch RP legend array this guard reads');
+  else {
+    const bare = block
+      .replace(/\$\{[^}]*\}/g, '')
+      .replace(/Table 6-2/g, '') // a clause citation is not a threshold; every other digit in there is
+      .replace(/§[\d.]+/g, '');
+    const digits = bare.match(/\d/g);
+    if (digits) fail(`the RP legend hard-codes ${[...new Set(digits)].join('')} — thresholds come from POINTS/LEVELS, or the caption drifts from the grading again`);
+    for (const c of ['POINTS.autoRpMinCoral', 'POINTS.coralRpThresholdPerLevel', 'POINTS.coralRpLevelsWithCoop', 'POINTS.bargeRpThreshold', 'POINTS.rp.win', 'POINTS.rp.tie', 'LEVELS.length']) {
+      if (!block.includes(c)) fail(`the RP legend stopped naming ${c}, which is the number the engine graded with`);
+    }
+    if (!ui.includes('it separated nobody')) fail('ui.js no longer says out loud what a bar every ALLIANCE crossed means');
+  }
+  if (!eng.includes('rpAward: {')) fail('engine.js stopped exporting which RP a MAJOR foul gifted');
+  if (!ui.includes('s.rpAward')) fail('ui.js never reads rpAward, so a gifted RP prints as an earned one');
+  if (!/"validate": "[^"]*npm run rp/.test(pkg)) fail('package.json runs validate without the RP audit — its per-MATCH regrading is the only thing that catches a grading drift');
+  for (const c of ['POINTS.autoRpMinCoral', 'POINTS.coralRpThresholdPerLevel', 'POINTS.bargeRpThreshold', 'rpAward']) {
+    if (!audit.includes(c)) fail(`scripts/rp.mjs no longer reads ${c}: the audit would be regrading something other than what the engine grades`);
+  }
+  // One RP column, because the manual prints one. Table 6-2's footnote says the CORAL and BARGE bars "may
+  // increase" at District/Championship and gives no number, and `objective`/`event` were keys nothing read.
+  // If a future manual does publish a second column, this is the guard that has to be replaced by a real one.
+  const model = fs.readFileSync(path.join(ROOT, JS_DIR, 'model.js'), 'utf8');
+  const scenario = model.match(/export function defaultScenario\(\) \{[\s\S]*?\n  \};/)?.[0] || '';
+  for (const dead of ['objective:', 'event:']) {
+    if (scenario.includes(dead)) fail(`defaultScenario carries ${dead} again — nothing in web/js or scripts reads it, and no 2025 clause gives a second RP column`);
+  }
+}
+
 console.log(bad === 0 ? `OK: ${files.length} files are UTF-8 clean and index.html tags balance.` : `${bad} problem(s).`);
 process.exit(bad === 0 ? 0 : 1);

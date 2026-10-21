@@ -1416,7 +1416,19 @@ function renderBatch(e, ran, kind) {
     const label = document.createElement('span');
     label.innerHTML = '<b></b><br /><small class="hint"></small>';
     label.querySelector('b').textContent = name;
-    label.querySelector('small').textContent = note;
+    // What the bar did in THIS batch, said out loud. `scripts/rp.mjs` measured it over 48 MATCHes in three
+    // arms: the AUTO rung is crossed by every ALLIANCE (LEAVE is 3 of 3 and AUTO CORAL never 0), the BARGE
+    // rung by every one (BARGE sits at 30-36 against a bar of 16), and the CORAL rung by 97.9%-100%. So a
+    // full bar here is not "both fleets earned this too" — it is a bar that separated nobody, and a batch's
+    // RP total is the win plus a constant until the calibration changes. The percentages are the evidence;
+    // this is the sentence, and it moves with the batch rather than with the README.
+    const all = (v) => v === 1;
+    const none = (v) => v === 0;
+    const pinned =
+      all(e.rp.blue[key]) && all(e.rp.red[key]) ? ' · every ALLIANCE in this batch crossed it, so it separated nobody'
+      : none(e.rp.blue[key]) && none(e.rp.red[key]) ? ' · no ALLIANCE in this batch crossed it'
+      : '';
+    label.querySelector('small').textContent = note + pinned;
     const nums = document.createElement('strong');
     nums.className = 'mono';
     nums.textContent = `${pctOf(e.rp.blue[key])} / ${pctOf(e.rp.red[key])}`;
