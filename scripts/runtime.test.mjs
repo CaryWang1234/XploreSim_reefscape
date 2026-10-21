@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import { createWorkerClient } from '../web/js/worker-client.js';
 import { runSimulation, simulationSteps, runCooperatively, MAX_BATCH } from '../web/js/simulation.js';
 import { frameIndexAtTime, parseReplay } from '../web/js/replay.js';
@@ -517,6 +518,34 @@ test('a short file leaves the rest of the field alone and says so', () => {
   assert.equal(eight.rows.length, 8);
   const full = placeRosters(eight.rows, current);
   assert.ok(full.notes.some((n) => n.includes('2 row(s) did not fit')), 'the FIELD takes six ROBOTS and the file sent eight');
+});
+
+test('the example scouting file is the file the README promises', () => {
+  // The shipped example is what a team opens first, and `npm run check` already re-parses its headers against
+  // the README; this is the other half — the six cards it writes have to survive the codec the autosave and the
+  // link share, or the example would be a file you cannot hand to a teammate.
+  const read = readFileSync(new URL('../docs/scouting-example.csv', import.meta.url), 'utf8');
+  const { rows, unknown } = parseScouting(read);
+  assert.deepEqual(unknown, [], 'the shipped example uses a header the parser does not read');
+  assert.equal(rows.length, 6, 'six rows, two ALLIANCES');
+  const current = {
+    blue: PRESETS.find((p) => p.key === 'johnson').trio.map((p) => JSON.parse(JSON.stringify(p))),
+    red: PRESETS.find((p) => p.key === 'newton').trio.map((p) => JSON.parse(JSON.stringify(p))),
+  };
+  const { trios } = placeRosters(rows, current);
+  const packed = shippedSetup({ trios });
+  assert.deepEqual(packed.problems, [], `the example will not pack: ${packed.problems.join(' / ')}`);
+  const back = readSetup(decode(encode(packed)).obj);
+  assert.deepEqual(back.problems, [], back.problems.join(' / '));
+  for (const side of ['blue', 'red']) {
+    for (let i = 0; i < 3; i++) assert.deepEqual(back.setup.trios[side][i], trios[side][i], `${side} ${i} changed on the round trip`);
+  }
+  // The outcome columns are the Statbotics numbers committed in `model.js`'s own `ref` strings, so the example
+  // is checkable against the repo rather than being invented for the occasion.
+  assert.equal(trios.blue[0].autoCycles, 4, '2056 records auto_coral 4.01');
+  assert.equal(trios.red[1].team, 3683);
+  assert.equal(trios.red[1].canClimbDeep, true, 'barge_points 5.36 is above the DEEP line and must keep the hold');
+  assert.equal(trios.red[2].name, 'StuyPulse');
 });
 
 test('a file is read as a file: separators, comments and a header with nothing under it', () => {

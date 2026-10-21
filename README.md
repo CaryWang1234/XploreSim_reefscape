@@ -1116,7 +1116,8 @@ first and then Red, three an ALLIANCE; a short file leaves the rest of the field
 did not touch. The result is a receipt, not a summary — every clamped number, every refused column and every
 derived clock is printed under the buttons. A header is matched case-insensitively with spaces, hyphens and
 underscores treated as the same separator, so `Drive Speed`, `drive_speed` and `drivespeedips` all land on one
-field.
+field. [`docs/scouting-example.csv`](docs/scouting-example.csv) is a file the page reads, and `npm run check`
+re-parses it against the table below, so the two cannot drift apart.
 
 | header (and the spellings it takes) | card field | unit | the range a card can hold |
 | --- | --- | --- | --- |
@@ -1132,8 +1133,8 @@ field.
 | `coral_per_match`, `total_game_pieces`, `avg_coral` | the whole timeline | CORAL a MATCH | scaled by 16.5 ÷ the rate, the same fit `model.js` built its named cards with |
 | `teleop_coral` (+ `auto_coral`) | the whole timeline | CORAL a MATCH | the two columns sum to the rate above |
 | `pick_s`, `acq_s`, `intake_s` | `pickSec` | s | 0.3-4 |
-| `place_l1_s` … `place_l4_s` | `placeSec.L1` … `L4` | s | 0.1-6 |
-| `l1_drop_pct` … `l4_drop_pct` | `placeDrop.L1` … `L4` | % | 0-90 (0.9), either as 18 or 0.18 |
+| `place_l1_s`, `place_l2_s`, `place_l3_s`, `place_l4_s` | `placeSec.L1` … `L4` | s | 0.1-6 |
+| `l1_drop_pct`, `l2_drop_pct`, `l3_drop_pct`, `l4_drop_pct` | `placeDrop.L1` … `L4` | % | 0-90 (0.9), either as 18 or 0.18 |
 | `strip_s`, `algae_strip_s` | `algaeStripSec` | s | 0.4-5 |
 | `net_lift_s`, `net_score_s`, `can_net`, `lifts_net` | `netScoreSec` | s, or yes/no | 0-6; `yes` is the card's own L4 time + 0.5 s |
 | `climb_s`, `ascent_s` | `climbSec` | s | 0.5-10 |

@@ -1,0 +1,22 @@
+# XploreSim REEFSCAPE — example scouting file.
+#
+# The three OUTCOME columns below (`auto_coral`, `teleop_coral`, `barge_points`) are the Statbotics 2025 EPA
+# values that `web/js/model.js` records for these six teams, so this file is checkable against the repo.
+# The PROCESS columns (speed, turn rate, weight, arm, pick, place, drop, strip, NET, climb, reliability) are
+# placeholders in the units a pit measures in — replace them with your own stopwatch and scale readings, which
+# is the whole reason this button exists.
+#
+# Header lines starting with `#` and blank lines are ignored. Column order is free, the separator may be a
+# comma, a semicolon or a tab, and a cell may be empty — an empty cell means "nobody measured that", and the
+# card keeps what it had. Percentages can be written 94 or 0.94. Metric columns have their own names
+# (`speed_mps`), so they are converted rather than read as inches.
+#
+# Rows 1-3 fill BLUE, rows 4-6 fill RED. A file with fewer rows fills what it can and says which slots it left
+# alone; a file with more than six says which rows did not fit.
+team,name,chassis,drive_speed,turn_rate,weight,auto_coral,arm_s,pick_s,place_l1_s,place_l2_s,place_l3_s,place_l4_s,l1_drop_pct,l2_drop_pct,l3_drop_pct,l4_drop_pct,strip_s,net_lift_s,climb_s,climb_success_pct,teleop_coral,barge_points,reliability_pct
+2056,OP Robotics,swerve,178,420,108,4.01,1.7,0.5,0.28,0.46,0.71,1.02,0.5,1,2,4,0.7,1.5,1.9,97,21.49,12.37,98
+1678,Citrus Circuits,swerve,172,400,104,3.49,1.9,0.52,0.3,0.49,0.76,1.09,0.5,1,2,4,0.75,1.6,2,96,17.53,12.16,97
+118,Robonauts,swerve,169,390,106,2.46,2,0.55,0.31,0.51,0.79,1.13,0.5,1,2,5,0.8,1.7,2.1,95,19.62,11.99,97
+4678,CyberCavs,swerve,175,410,110,3.33,1.85,0.54,0.3,0.5,0.78,1.11,0.5,1,2,4,0.72,1.65,2.05,96,19.04,10.09,96
+3683,Team DAVE,mecanum,163,370,101,3.34,2.1,0.58,0.32,0.53,0.82,1.18,0.6,1.2,2.4,5,0.65,1.4,2.2,94,15.95,5.36,96
+694,StuyPulse,swerve,166,380,99,3.08,2.05,0.57,0.32,0.52,0.81,1.16,0.6,1.2,2.4,5,0.85,1.8,2.3,93,16.25,14.1,99

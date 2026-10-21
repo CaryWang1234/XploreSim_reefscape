@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const HTML = 'web/index.html';
@@ -337,6 +337,23 @@ for (const name of fs.readdirSync(path.join(ROOT, 'scripts'))) {
   // to know a header lands on the right *value* is to parse a file and read the card back.
   const tests = fs.readFileSync(path.join(ROOT, 'scripts', 'runtime.test.mjs'), 'utf8');
   if (!tests.includes('scouting.js')) fail('nothing imports scouting.js in the tests: a column can map to the wrong field and stay green');
+  // The example file is the contract a team reads, and the only place the header spellings are written down
+  // outside the code. It has to parse with nothing refused, and every header in it has to be a name README.md
+  // actually documents — otherwise the page promises a column the parser never agreed to.
+  const examplePath = path.join(ROOT, 'docs', 'scouting-example.csv');
+  if (!fs.existsSync(examplePath)) fail('docs/scouting-example.csv is missing: the column contract has no example');
+  else {
+    const read = fs.readFileSync(examplePath, 'utf8');
+    const head = read.split(/\r?\n/).find((l) => l.trim() !== '' && !l.trim().startsWith('#')).split(',');
+    const readme = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
+    const { parseScouting } = await import(pathToFileURL(path.join(ROOT, JS_DIR, 'scouting.js')).href);
+    const parsed = parseScouting(read);
+    if (parsed.unknown.length) fail(`docs/scouting-example.csv has header(s) the parser no longer reads: ${parsed.unknown.join(', ')}`);
+    if (parsed.rows.length !== 6) fail(`docs/scouting-example.csv parses as ${parsed.rows.length} cards, not the six it prints`);
+    const remarks = parsed.problems.filter((p) => !/season mean|outside the/.test(p));
+    if (remarks.length) fail(`the example file does not parse cleanly: ${remarks.join(' · ')}`);
+    for (const h of head) if (!readme.includes(`\`${h}\``)) fail(`the example carries the header "${h}" and README.md never lists it`);
+  }
 }
 
 console.log(bad === 0 ? `OK: ${files.length} files are UTF-8 clean and index.html tags balance.` : `${bad} problem(s).`);
