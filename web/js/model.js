@@ -651,6 +651,15 @@ export function defaultScenario() {
     // the ablation and `npm run contact` is what places the thresholds against the real 2025 rate of 0-2
     // fouls a MATCH. G422 needs a COMPONENT outside the ROBOT PERIMETER, which no machine in this build has.
     contactFouls: true,
+    // §6.6.2, verbatim: "YELLOW CARDS are additive, meaning that a second YELLOW CARD is automatically
+    // converted to a RED CARD, including earning a second YELLOW CARD during a single MATCH", and a RED CARD
+    // DISQUALIFIES the team — §5 defines DISQUALIFIED as inoperable for the remainder of the MATCH, and a
+    // DISQUALIFIED team books 0 MATCH points and 0 Ranking Points in a Qualification match. `true` is that
+    // rule. `false` is the ablation `scripts/cards.mjs` prices: a second warning that is only a yellow
+    // rectangle on the audience display, with the machine still on the carpet. The conversion itself draws
+    // nothing — it reads the tally the foul already incremented — but a machine that keeps driving spends
+    // the rest of the MATCH differently, so the off arm is a different MATCH, not the same one rolled again.
+    cardLadder: true,
     // Per-ALLIANCE HUMAN PLAYER settings, all `[estimate]` except the storage limit.
     humanPlayer: {
       blue: { ...HUMAN_PLAYER },

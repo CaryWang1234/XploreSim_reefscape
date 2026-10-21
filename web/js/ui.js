@@ -357,6 +357,9 @@ function scenarioFromUI() {
     // dropped a climb, so the ablation is the same MATCH rather than the same MATCH rolled again.
     climbRisk: $('chk-climb-risk').checked,
     contactFouls: $('chk-contact-fouls').checked,
+    // §6.6.2's ladder: the second YELLOW in a MATCH becomes a RED, and the RED takes the machine out of the
+    // rest of it. On is the rule; off is what `npm run cards` measures against.
+    cardLadder: $('chk-cardladder').checked,
     // 0 is the deterministic mirror: both ALLIANCES then play one process twice and land on the same
     // number, which is the artefact the field of machines is there to remove.
     tempoJitter: Math.max(0, Math.min(0.6, (parseFloat($('inp-jitter').value, 10) || 0) / 100)),

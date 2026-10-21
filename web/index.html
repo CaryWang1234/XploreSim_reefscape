@@ -109,6 +109,9 @@
             <label class="check" title="§7.4.4: G423 (damage or functional impairment) and G424 (a deliberate tip), one call per collision and only the more punitive of the two, MAJOR FOUL + YELLOW CARD — and a second YELLOW in the same MATCH is a RED, which DISABLES the ROBOT for the rest of it. Two fleets that never meet commit none: npm run contact counts 7 and 10 collisions across the two 24-MATCH mirror batches (0.3 and 0.4 a MATCH) and cards none of them, and the 3 calls (all G423) it counts across the 48 MATCHes that force a defender onto the FIELD are what this switch exists for. Off = the ablation.">Opponent contact fouls
               <input type="checkbox" id="chk-contact-fouls" checked />
             </label>
+            <label class="check" title="§6.6.2: &quot;YELLOW CARDS are additive, meaning that a second YELLOW CARD is automatically converted to a RED CARD, including earning a second YELLOW CARD during a single MATCH&quot;, and a RED DISQUALIFIES the team — §5: inoperable for the remainder of the MATCH. Two fleets that never meet commit no cards at all, so this only bites on a seat that presses: npm run cards prices it on paired seeds where a defender is forced onto the FIELD, and prints the warning, the conversion and the DISABLED machine. Off = a second warning is a yellow rectangle on the audience display and nothing else. Note this build models the inoperable half of a DISQUALIFICATION, not the &quot;0 MATCH points and 0 Ranking Points&quot; half — see the comment in engine.js.">Second YELLOW is a RED
+              <input type="checkbox" id="chk-cardladder" checked />
+            </label>
             <label class="check" title="Draw the REEF ZONE / BARGE ZONE outlines and the level labels.">Zone outlines
               <input type="checkbox" id="chk-labels" checked />
             </label>

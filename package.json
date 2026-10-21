@@ -10,6 +10,7 @@
     "check": "node scripts/check_web.mjs",
     "verify": "node scripts/invariants.mjs",
     "rp": "node scripts/rp.mjs",
+    "cards": "node scripts/cards.mjs",
     "measure": "node scripts/measure.mjs",
     "headroom": "node scripts/headroom.mjs",
     "contact": "node scripts/contact.mjs",

@@ -171,5 +171,25 @@ for (const name of fs.readdirSync(path.join(ROOT, 'scripts'))) {
   }
 }
 
+// §6.6.2's card ladder is one rule with four homes, and the pair that broke silently before it was measured
+// was the switch and the checkbox: `engine.js` converts, `model.js` ships it on, `ui.js` reads the box into the
+// scenario, `index.html` carries the box, and `scripts/cards.mjs` prices it. Any missing link is a control that
+// lies to the reader — a box that changes nothing, or a measured price with no box to reproduce.
+{
+  const ui = fs.readFileSync(path.join(ROOT, JS_DIR, 'ui.js'), 'utf8');
+  const eng = fs.readFileSync(path.join(ROOT, JS_DIR, 'engine.js'), 'utf8');
+  const model = fs.readFileSync(path.join(ROOT, JS_DIR, 'model.js'), 'utf8');
+  const audit = fs.readFileSync(path.join(ROOT, 'scripts', 'cards.mjs'), 'utf8');
+  if (!html.includes('id="chk-cardladder"')) fail('index.html lost the second-YELLOW checkbox');
+  if (!ui.includes("$('chk-cardladder')")) fail('ui.js never reads #chk-cardladder, so the box is decoration');
+  if (!ui.includes('cardLadder:')) fail('ui.js no longer puts cardLadder into the scenario');
+  if (!model.includes('cardLadder: true')) fail('model.js no longer ships the ladder ON, which is the rule');
+  if (!eng.includes('st.scenario.cardLadder && rb.yellow >= 2')) fail('engine.js no longer gates the second-yellow conversion on the switch');
+  for (const needle of ['cardLadder', 'defendSlots', 'contactImpairP']) {
+    if (!audit.includes(needle)) fail(`scripts/cards.mjs no longer reads ${needle}: it would be pricing something other than the shipped mechanism`);
+  }
+  if (!/"cards": "node scripts\/cards.mjs"/.test(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))) fail('package.json has no `npm run cards`, so the price has no reproducible print');
+}
+
 console.log(bad === 0 ? `OK: ${files.length} files are UTF-8 clean and index.html tags balance.` : `${bad} problem(s).`);
 process.exit(bad === 0 ? 0 : 1);

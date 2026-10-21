@@ -1275,9 +1275,21 @@ function foul(st, rb, code, info) {
   let card = info?.card || null;
   if (card === 'YELLOW') {
     rb.yellow += 1;
-    if (rb.yellow >= 2) card = 'RED';
+    // The conversion is what makes the second warning a consequence, so it is the one thing
+    // `cardLadder: false` removes — the machine keeps its tally of warnings and stays on the carpet.
+    if (st.scenario.cardLadder && rb.yellow >= 2) card = 'RED';
   }
   if (card === 'RED') rb.disabled = true;
+  // What this build does with a RED CARD is the DISABLED half of §5's definitions — "commanded to deactivate
+  // all outputs, rendering the ROBOT inoperable for the remainder of the MATCH". The other half, "a
+  // DISQUALIFIED team receives 0 MATCH points and 0 Ranking Points in a Qualification MATCH", is not
+  // implemented, and the reason is bookkeeping rather than oversight: the alliance ledger counts what is
+  // standing on each BRANCH, on each TROUGH and in each NET, and a CORAL that a rammer placed and a teammate
+  // later re-seated is one piece with no owner. Zeroing a team's points would need a per-ROBOT record of the
+  // pieces still scored, kept honest through drops, re-scores and de-scoring — which is a new ledger under the
+  // eight committed fingerprints, not a clause to switch on. So the price `scripts/cards.mjs` prints is a
+  // floor: it is what losing a machine for the rest of the MATCH costs, and a real DQ also takes that team's
+  // tally and its RPs off the alliance.
   st.events.push({
     t: st.t, kind: 'foul', side: rb.side, slot: rb.slot, code, sev, card,
     victim: info?.victim || null, severity: info?.severity || null,
