@@ -406,7 +406,10 @@ export function scaleProfile(p, slow) {
 // stays the rule and the AUTO gap is stated per lineup rather than averaged into a win. The same export's
 // `auto_leave_points` is 2.80-3.26 a ROBOT against the 3 one crossing pays, which is the ledger's 9 LEAVE and
 // why the budget pays for the cross inside the 15 s instead of leaving it to the end.
-const REF_CORAL_PER_ROBOT = 16.5; // fitted so a scaled trio lands on the recorded ALLIANCE totals (see below)
+// Exported because `scouting.js` honours an imported `coral_per_match` column through the same fit rather than
+// inventing its own reference rate: two numbers that mean "what a 16.5-CORAL machine looks like" would be a
+// calibration that quietly disagrees with the cards the page ships.
+export const REF_CORAL_PER_ROBOT = 16.5; // fitted so a scaled trio lands on the recorded ALLIANCE totals (see below)
 
 // `[estimate]` the fastest 2025 chassis ran about 4.6 m/s, ~180 in/s, so the drivetrain half of the scale is
 // clipped: a ROBOT credited with 25 CORAL a MATCH did not get them by outrunning everyone by 50%, it got

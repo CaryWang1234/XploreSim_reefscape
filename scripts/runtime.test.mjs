@@ -378,3 +378,169 @@ test('a setup that cannot fit a link is refused rather than truncated', () => {
   assert.match(error, new RegExp(String(chars)), 'the message should carry the number the reader has to act on');
   assert.ok(STORAGE_KEY.includes('reefscape'), 'the 2025 page must not write into the 2026 page storage key');
 });
+
+// ---- the scouting importer: a file in, six cards out, every change said -------------------------------
+// The parser is the one place where a wrong column becomes a wrong machine, and the card is what the engine
+// drives — so these read a file the way a team writes one (mixed case, `Team Number`, a metric column, a
+// percentage as 94), and then run the result back through the same codec the autosave uses. An imported lineup
+// that cannot survive its own link is an import the user cannot hand to a teammate.
+import { parseScouting, placeRosters, toCard, COLUMN_DOC } from '../web/js/scouting.js';
+import { ROBOT_LIMITS } from '../web/js/rules.js';
+
+const SCOUT = [
+  'Team Number,Robot Name,Drivetrain,Drive Speed,auto_coral,teleop_coral,barge_points,climb_s,climb_success_pct,arm_s,net_lift_s,weight,reliability_pct,l4_drop_pct,opr',
+  '1690,Orbit,swerve,170,4.19,21.4,12.97,2.4,94,1.9,1.5,112,97,18,52.7',
+  '9999,Heavy robot,tank drive,300,0.4,1.2,2.1,9,45,11,0,160,61,80,40',
+].join('\n');
+
+test('a scouting header lands on the card field it names, in the model’s units', () => {
+  const { rows, unknown, problems } = parseScouting(SCOUT);
+  assert.equal(rows.length, 2, 'both robots should be read');
+  assert.deepEqual(unknown, ['opr'], 'only the aggregate column is unread');
+  assert.match(problems.join(' · '), /aggregate point total/, 'a refused column has to say why it was refused');
+  const r = rows[0];
+  assert.equal(r.team, 1690);
+  assert.equal(r.name, 'Orbit');
+  assert.equal(r.chassis, 'swerve');
+  assert.equal(r.driveSpeedIps, 170, 'Drive Speed is the in/s column');
+  assert.equal(r.autoCycles, 4, 'auto_coral is a mean; the card counts the pieces');
+  assert.equal(r.teleopCoral, 21.4);
+  assert.equal(r.climbSec, 2.4);
+  assert.equal(r.climbSuccess, 0.94, 'a percent arrives as a percent and is stored as a fraction');
+  assert.equal(r.reliability, 0.97);
+  assert.equal(r.dropL4, 0.18);
+  assert.equal(r.weightLb, 112);
+  assert.equal(r.netLift, 1.5);
+  assert.equal(r.bargePoints, 12.97);
+  // A value that needed no clamping says nothing, and that is the control for the test below: without it, a
+  // parser that reported on every cell would pass both. (The AUTO mean is a rounding, not a clamp, and the
+  // first robot's row is allowed exactly one of those.)
+  assert.equal(problems.filter((p) => p.startsWith('row 1') && p.includes('outside')).length, 0, problems.join(' · '));
+});
+
+test('a number outside the card is clamped and the sentence carries both numbers', () => {
+  const { problems } = parseScouting(SCOUT);
+  const text = problems.join(' · ');
+  assert.match(text, /300 is outside the 40-200/, `the too-fast robot was absorbed silently: ${text}`);
+  // Built with `new RegExp`, because `${…}` inside a regex literal is four characters, not an interpolation —
+  // and a guard that compares against the literal text "${ROBOT_LIMITS…}" passes whatever the code does.
+  assert.match(text, new RegExp(`160 is outside the 40-${ROBOT_LIMITS.weightLbMax}`), 'R103’s cap is the clamp and the message has to say so');
+  assert.match(text, /0\.4 is a season mean/, 'a fractional AUTO count is rounded, and rounding is a claim');
+  const heavy = parseScouting(SCOUT).rows[1];
+  assert.equal(heavy.driveSpeedIps, 200);
+  assert.equal(heavy.weightLb, ROBOT_LIMITS.weightLbMax);
+  assert.equal(heavy.autoCycles, 0);
+  assert.equal(heavy.chassis, 'tank', 'the "tank drive" spelling is the tank chassis, not an unknown one');
+});
+
+test('an imported card is a machine: nested where the profile nests, flat names nowhere', () => {
+  const row = parseScouting(SCOUT).rows[0];
+  const { profile: p, matchedPreset } = toCard(row, []);
+  assert.equal(matchedPreset, 'team1690', 'a team this build models is built on its own card');
+  assert.equal(p.placeDrop.L4, 0.18, 'the flat drop column has to land inside placeDrop');
+  assert.equal(typeof p.placeSec.L3, 'number');
+  assert.equal(p.canClimbDeep, true, 'barge_points 12.97 is a DEEP hold');
+  assert.equal(p.netScoreSec, 1.5);
+  // Nothing that is not a profile field may ride on the card, and nothing that is not this machine's identity
+  // may ride either: `key`, `ref` and `pieces` belong to the preset a scouted card overwrote.
+  for (const leak of ['armSec', 'coralPerMatch', 'teleopCoral', 'bargePoints', 'netLift', 'dropL4', 'placeL4', 'key', 'ref', 'pieces']) {
+    assert.equal(p[leak], undefined, `${leak} reached the card as a wire name nothing reads`);
+  }
+  // The BARGE line is the midpoint of Table 6-2's three prices, and an explicit DEEP column outranks it. The two
+  // readings bracket where the line has to sit: `model.js` gave 1778 (barge_points 2.79) no DEEP hold and kept it
+  // for 3683 (5.36), so an importer that drew the line anywhere else would disagree with the cards it ships.
+  assert.equal(toCard({ team: 9999, bargePoints: 2.1 }, []).profile.canClimbDeep, false);
+  assert.equal(toCard({ team: 9999, bargePoints: 5.36 }, []).profile.canClimbDeep, true);
+  assert.equal(toCard({ team: 9999, bargePoints: 2.1, canClimbDeep: true }, []).profile.canClimbDeep, true);
+  // The one rate the importer takes from the rules file rather than from itself.
+  const weight = COLUMN_DOC.find((c) => c.field === 'weightLb');
+  assert.equal(weight.spec, `range:40:${ROBOT_LIMITS.weightLbMax}`, 'the CSV must not carry a second copy of R103');
+});
+
+test('arm seconds move the ladder, not the shape of it', () => {
+  const base = ROBOT_PRESETS.find((r) => r.profile.team === 1690).profile;
+  const { profile: p, notes } = toCard({ team: 1690, armSec: 3 }, []);
+  assert.ok(Math.abs(p.pickSec + p.placeSec.L3 - 3) < 0.01, `the card reads ${p.pickSec} + ${p.placeSec.L3} s, not 3 s`);
+  const shape = (q) => q.placeSec.L4 / q.placeSec.L1;
+  assert.ok(Math.abs(shape(p) / shape(base) - 1) < 0.03, 'one stopwatch number must not redraw the level curve');
+  assert.ok(notes.some((n) => n.includes("the drive stays the model's")), 'a derived clock that is not said is a guess');
+  // The scale is bounded by what a card can hold, and going past it is reported rather than drawn.
+  const slow = toCard({ team: 1690, armSec: 12 }, []);
+  assert.ok(slow.notes.some((n) => n.includes('0.33-×3')), slow.notes.join(' · '));
+  assert.ok(slow.profile.placeSec.L4 <= 6, 'the derivation must stay inside the card');
+});
+
+test('the six cards an import writes survive the link the autosave writes', () => {
+  const current = {
+    blue: PRESETS.find((p) => p.key === 'johnson').trio.map((p) => JSON.parse(JSON.stringify(p))),
+    red: PRESETS.find((p) => p.key === 'newton').trio.map((p) => JSON.parse(JSON.stringify(p))),
+  };
+  const six = [
+    'team,chassis,drive_speed,auto_coral,teleop_coral,arm_s,barge_points,climb_success_pct',
+    '1690,swerve,170,4.19,21.4,1.9,12.97,94',
+    '4414,swerve,160,2.47,19.3,2.2,11.2,92',
+    '2073,swerve,140,1.55,10.8,2.6,6.4,88',
+    '2910,swerve,175,3.99,18.5,1.8,12.97,95',
+    '1323,mecanum,165,3.61,22.1,2.0,9.1,93',
+    '4272,tank,130,2.49,13.9,2.9,2.4,85',
+  ].join('\n');
+  const rows = parseScouting(six).rows;
+  assert.equal(rows.length, 6);
+  const { trios, notes } = placeRosters(rows, current);
+  // Every card is accounted for and none of them ran out of the FIELD: the notes here are the derivations, and
+  // the only ones that would mean trouble are the fit and the leftovers.
+  assert.equal(notes.filter((n) => n.includes('did not fit') || n.includes('kept the cards they had')).length, 0, notes.join(' · '));
+  assert.equal(trios.red[2].chassis, 'tank');
+  const packed = shippedSetup({ trios });
+  assert.deepEqual(packed.problems, [], `the imported lineup will not pack: ${packed.problems.join(' / ')}`);
+  const back = readSetup(decode(encode(packed)).obj);
+  assert.deepEqual(back.problems, [], `an imported card went through the link with a complaint: ${back.problems.join(' / ')}`);
+  for (const side of ['blue', 'red']) {
+    for (let i = 0; i < 3; i++) {
+      assert.deepEqual(back.setup.trios[side][i], trios[side][i], `${side} ${i} is a different machine after the link`);
+    }
+  }
+});
+
+test('a short file leaves the rest of the field alone and says so', () => {
+  const current = {
+    blue: PRESETS.find((p) => p.key === 'johnson').trio.map((p) => JSON.parse(JSON.stringify(p))),
+    red: PRESETS.find((p) => p.key === 'newton').trio.map((p) => JSON.parse(JSON.stringify(p))),
+  };
+  const one = 'team,drive_speed\n4414,155';
+  const { trios, notes } = placeRosters(parseScouting(one).rows, current);
+  assert.equal(trios.blue[0].driveSpeedIps, 155);
+  assert.deepEqual(trios.blue[1], current.blue[1], 'a one-row file must not rewrite the ally');
+  assert.deepEqual(trios.red, current.red, 'a one-row file must not rewrite the other ALLIANCE');
+  assert.ok(notes.some((n) => n.includes('Blue 1/3')), notes.join(' · '));
+  const eight = parseScouting(['team,speed', ...Array.from({ length: 8 }, (_, i) => `${2000 + i},15${i}`)].join('\n'));
+  assert.equal(eight.rows.length, 8);
+  const full = placeRosters(eight.rows, current);
+  assert.ok(full.notes.some((n) => n.includes('2 row(s) did not fit')), 'the FIELD takes six ROBOTS and the file sent eight');
+});
+
+test('a file is read as a file: separators, comments and a header with nothing under it', () => {
+  const tabs = ['team\tdrive_speed\tdeep', '2501\t148\tno', '2502\t151\tyes'].join('\n');
+  const t = parseScouting(tabs);
+  assert.equal(t.rows.length, 2, 'a tab-separated export is the same thing');
+  assert.equal(t.rows[1].canClimbDeep, true);
+  const commented = parseScouting('# my scouting sheet, week 3\nteam,speed\n7766,142\n\nstray\n');
+  assert.equal(commented.rows.length, 1);
+  assert.ok(commented.problems.some((p) => p.includes('one cell only')), commented.problems.join(' · '));
+  assert.deepEqual(parseScouting('team,speed').problems, ['a CSV needs a header line and at least one robot']);
+  assert.deepEqual(parseScouting('').rows, []);
+  // A cell that is all words has no number in it, and a parser that read it as 0 would field a robot that
+  // cannot move.
+  const words = parseScouting('team,speed,weight\n5,"fast","n/a"');
+  assert.equal(words.rows[0].driveSpeedIps, undefined, '"fast" became a speed');
+  assert.equal(words.rows[0].weightLb, undefined, '"n/a" became 0 lb');
+  assert.equal(words.rows[0].team, 5);
+  // A sheet with blanks in it is the normal case, not an error: a cell nobody measured is a column the card
+  // keeps as shipped, and it must not come back as a complaint about every empty cell in the file.
+  const blanks = parseScouting('team,speed,pick_s,weight\n5,,0.55,');
+  assert.equal(blanks.rows[0].team, 5);
+  assert.equal(blanks.rows[0].pickSec, 0.55);
+  assert.equal(blanks.rows[0].driveSpeedIps, undefined);
+  assert.deepEqual(blanks.problems, [], `an empty cell was read as a bad one: ${blanks.problems.join(' · ')}`);
+});
+

@@ -1092,6 +1092,71 @@ alliance ledger, never to set it. The ROBOT footprint is now R104's 120 in perim
 no bumper allowance added, which is the rule's bound rather than a measured machine — real robots are
 rectangles with bumpers, and the square is what the perimeter permits, not what any team built.
 
+## The setup is bytes: an autosave, a link, a CSV in
+
+Every card, switch, HUMAN PLAYER rate and seed on the setup panel is written to the browser's `localStorage` as
+it is edited (debounced 600 ms), and the same bytes fit in a link: `Copy setup link` puts them in the address bar
+and the clipboard, and opening that link restores the lineup. One codec does both (`web/js/statestore.js`), so a
+link cannot restore anything the autosave would not. A card is stored as a preset index plus the fields that
+differ from it, so a named lineup stays small and only a Custom card costs its whole profile — and the page prints the
+character count of the link it wrote, so the size is a measurement rather than a claim.
+
+Everything that comes back is hostile input: a link from a clipboard, or an entry this browser wrote months ago.
+Unknown keys are dropped and named, a `placeSec` object is refused where the flat `placeL4` belongs, every number
+is clamped to a range a card can be built with and both the old and new value are printed, a payload carrying
+`__proto__` as an own key cannot reach `Object.prototype`, and an entry from a different codec version is refused
+whole rather than half-applied. `scripts/runtime.test.mjs` runs the decoder directly, because a page module that
+touches no DOM and no storage can be attacked outside a browser.
+
+### Importing a scouting CSV
+
+`Import scouting CSV` fills the cards from a file the team already has — a scouting sheet, a Statbotics EPA
+export, a TBA spreadsheet download. The file is read where it sits: the page asks for no network. Rows fill Blue
+first and then Red, three an ALLIANCE; a short file leaves the rest of the field alone and says which slots it
+did not touch. The result is a receipt, not a summary — every clamped number, every refused column and every
+derived clock is printed under the buttons. A header is matched case-insensitively with spaces, hyphens and
+underscores treated as the same separator, so `Drive Speed`, `drive_speed` and `drivespeedips` all land on one
+field.
+
+| header (and the spellings it takes) | card field | unit | the range a card can hold |
+| --- | --- | --- | --- |
+| `team`, `team_number`, `number` | `team` | integer | picks the modelled machine to build on, if any |
+| `name`, `robot_name`, `robot` | `name` | text | 40 characters |
+| `chassis`, `drivetrain`, `drive_type` | `chassis` | swerve / tank / mecanum | anything else is reported, not guessed |
+| `drive_speed`, `speed`, `max_speed` | `driveSpeedIps` | in/s | 40-200 |
+| `speed_mps`, `drive_speed_mps` | `driveSpeedIps` | m/s | × 39.37, then the same range |
+| `turn_rate`, `max_angular` | `turnRateDegS` | deg/s | 60-900 |
+| `weight`, `weight_lbs` | `weightLb` | lb | 40-R103's 115 |
+| `auto_coral`, `coral_auto`, `auto` | `autoCycles` | CORAL in the 15 s | 0-10, rounded: the card counts pieces |
+| `arm_s`, `pick_place_s`, `manipulation_s` | `pickSec` + the L1-L4 ladder | s | 0.5-12, spread over the ladder in its own proportions |
+| `coral_per_match`, `total_game_pieces`, `avg_coral` | the whole timeline | CORAL a MATCH | scaled by 16.5 ÷ the rate, the same fit `model.js` built its named cards with |
+| `teleop_coral` (+ `auto_coral`) | the whole timeline | CORAL a MATCH | the two columns sum to the rate above |
+| `pick_s`, `acq_s`, `intake_s` | `pickSec` | s | 0.3-4 |
+| `place_l1_s` … `place_l4_s` | `placeSec.L1` … `L4` | s | 0.1-6 |
+| `l1_drop_pct` … `l4_drop_pct` | `placeDrop.L1` … `L4` | % | 0-90 (0.9), either as 18 or 0.18 |
+| `strip_s`, `algae_strip_s` | `algaeStripSec` | s | 0.4-5 |
+| `net_lift_s`, `net_score_s`, `can_net`, `lifts_net` | `netScoreSec` | s, or yes/no | 0-6; `yes` is the card's own L4 time + 0.5 s |
+| `climb_s`, `ascent_s` | `climbSec` | s | 0.5-10 |
+| `climb_success_pct`, `hang_rate` | `climbSuccess` | % | 30-100 |
+| `barge_points`, `endgame_points`, `avg_barge` | `canClimbDeep` | points a MATCH | ≥ 4 is a DEEP hold; Table 6-2 prices DEEP 12, SHALLOW 6, PARK 2 |
+| `deep_cage`, `can_deep`, `climb_depth` | `canClimbDeep` | yes/no | overrides the BARGE column |
+| `reliability_pct`, `robot_reliability` | `reliability` | % | 60-100 |
+
+Two kinds of number arrive in those files and they are not the same thing. A **process** number — a drive speed, a
+pick time, a climb time — is a stopwatch, and it writes the clock field it names. An **outcome** number — AUTO
+CORAL, BARGE points, CORAL a MATCH — is what the machine achieved, and it is honoured the way `model.js` already
+honours it for the named presets: the AUTO column sets `autoCycles` (that field *is* the routine), the BARGE
+column says whether the team hangs DEEP, and a per-MATCH CORAL rate scales the whole timeline, because a faster
+machine got its pieces from shorter actions and cleaner paths rather than a longer AUTO.
+
+What is deliberately not here: `cycle_s` and `avg_cycle` (a full CORAL cycle contains the drive leg, and this
+model computes that leg from the FIELD, so the seconds would be paid for twice — give the mechanism half as
+`arm_s` or the outcome as `coral_per_match`); `net_algae` and `processor_algae` (an EPA ALGAE column is a share of
+an alliance total, not a reach — the card asks for the reach); and the RP and rating columns (`auto_rp`, `opr`,
+`epa`, `dc`), because an aggregate point total cannot be split into a drive speed and a cycle rate without
+guessing which of the two the team is good at. Each of those is refused **by name, with the column that would
+have been read**, and `npm run rp` regrades a real batch against Table 6-2 if what you have is the RP ledger.
+
 ## Commands
 
 | command | does |

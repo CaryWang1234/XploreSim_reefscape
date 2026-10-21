@@ -6,6 +6,7 @@ import { createWorkerClient } from './worker-client.js';
 import { simulationSteps, runCooperatively, MAX_BATCH } from './simulation.js';
 import { frameIndexAtTime, parseReplay } from './replay.js';
 import { STORAGE_KEY, HASH_PREFIX, buildSetup as packSetup, readSetup, encode, decode, toLink } from './statestore.js';
+import { parseScouting, placeRosters } from './scouting.js';
 import { HUMAN_PLAYER, CHASSIS, PRESETS, ROBOT_PRESETS, presetIndexOf } from './model.js';
 import { layout } from './model.js';
 import { drawField } from './viz.js';
@@ -468,7 +469,11 @@ function applySetup(setup) {
 }
 
 function setupLine(text) {
-  $('setup-store').textContent = text;
+  const el = $('setup-store');
+  el.textContent = text;
+  // The line truncates on a narrow panel, so the whole sentence goes with it as the tooltip: a status somebody
+  // can only read halfway is a status they cannot read, and this one carries the reason a setup was refused.
+  el.title = text;
 }
 
 function writeStorage(setup) {
@@ -545,6 +550,58 @@ function forgetSetup() {
     setupLine('saved setup deleted from this browser');
   } catch (e) {
     setupLine('this browser refused storage');
+  }
+}
+
+// The import's receipt. A clamped number, a refused column and a derived clock are all facts about somebody's
+// own data, so the page prints every one of them instead of a count — and prints them in the order the parser
+// hit them, so line 3 of the file is talked about before line 4.
+function reportImport(lines) {
+  const box = $('import-report');
+  const list = $('import-notes');
+  list.innerHTML = '';
+  for (const line of lines) {
+    const li = document.createElement('li');
+    li.textContent = line;
+    list.appendChild(li);
+  }
+  box.hidden = false;
+  box.open = true;
+  box.querySelector('summary').textContent = `what the file did · ${lines.length} note${lines.length === 1 ? '' : 's'}`;
+}
+
+// Scouting CSV in, cards out. The file is read where it sits and never leaves the page — no network is the rule
+// this repo keeps — and what comes back is a card per row plus a line for every number the model had to change.
+// A silently-ignored column is a card that is quietly wrong, and the whole point of importing somebody's
+// measurements is not to have to guess which ones landed.
+async function importScouting(ev) {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const { rows, problems, unknown } = parseScouting(text);
+    if (!rows.length) {
+      const lines = problems.length ? problems : ['no row in this file had a column the model could use'];
+      setupLine(`nothing imported from ${file.name}: ${lines[0]}`);
+      reportImport(lines);
+      return;
+    }
+    const { trios, notes } = placeRosters(rows, state.trios);
+    // Reassign rather than merge: a card the panel is showing has to be the card the engine runs, and the
+    // rebuilt roster reads the new trio out of `state.trios` (or out of Blue's, with the mirror on).
+    state.trios = trios;
+    const mirrorNote = state.mirror && rows.length > 3
+      ? 'Mirror is on: the Red cards show Blue’s trio, so the last rows are loaded without appearing on Red'
+      : null;
+    buildSetup();
+    queueSave();
+    const lines = [...(mirrorNote ? [mirrorNote] : []), ...notes, ...problems];
+    reportImport(lines);
+    setupLine(`${Math.min(rows.length, 6)} card(s) of the ${rows.length} in ${file.name} · ${lines.length} note(s) below${unknown.length ? ` · ${unknown.length} column(s) not read` : ''} · Run to drive them`);
+  } catch (e) {
+    setupLine(`${file.name} could not be read (${e && e.name ? e.name : e})`);
+  } finally {
+    ev.target.value = '';
   }
 }
 
@@ -2242,6 +2299,10 @@ function bind() {
   }
   $('btn-copy-link').addEventListener('click', copySetupLink);
   $('btn-forget').addEventListener('click', forgetSetup);
+  // The file input is hidden and driven by the button, so the panel shows one control rather than a browser
+  // chrome box next to it.
+  $('btn-import-scouting').addEventListener('click', () => $('inp-scouting').click());
+  $('inp-scouting').addEventListener('change', (ev) => void importScouting(ev));
   // Opening a link in a tab that already has the page loaded is a hashchange, not a load, so the second half
   // of the entry has to be listened for rather than only read at boot.
   window.addEventListener('hashchange', () => {

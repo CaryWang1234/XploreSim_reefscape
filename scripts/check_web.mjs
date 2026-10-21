@@ -235,5 +235,109 @@ for (const name of fs.readdirSync(path.join(ROOT, 'scripts'))) {
   if (!ui.includes('input.checked = deep ? !!deep[i] : i !== 1;')) fail('cageRow no longer renders from the carried-over ticks');
 }
 
+// The scouting importer. Its first contract is the codec's: no DOM, because the parser is the place where a
+// wrong column becomes a wrong card and only a test can hold it to that. Then the four ways this file can drift
+// out of agreement with the page it writes cards into: a column whose range disagrees with the editor that has
+// to display it; a header alias that normalizes onto a real column and shadows it, or onto a name that does not
+// exist and quietly does nothing; a refusal key written with an underscore, which `norm` strips, so the reason
+// is never found and the column reads as unknown; and a derived column that reaches a card as a wire name the
+// engine never reads.
+{
+  const scout = fs.readFileSync(path.join(ROOT, JS_DIR, 'scouting.js'), 'utf8');
+  const ui = fs.readFileSync(path.join(ROOT, JS_DIR, 'ui.js'), 'utf8');
+  const normOf = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
+  for (const bad of ['document.', 'window.', 'localStorage.']) {
+    if (scout.includes(bad)) fail(`scouting.js contains ${bad}: the parser must stay runnable outside a browser`);
+  }
+  const colsBlock = scout.match(/const COLUMNS = \[([\s\S]*?)\n\];/);
+  if (!colsBlock) fail('scouting.js has no COLUMNS table to read');
+  const rows = (colsBlock ? colsBlock[1] : '').split('\n').filter((l) => /^\s*\['/.test(l)).length;
+  // A field name may carry a digit — `placeL1`, `dropL4` — and a pattern that forgets it silently reads the
+  // eight level columns out of the table, which is how this guard itself first shipped: a contract that cannot
+  // see half the rows is a contract that will not notice those rows being wrong.
+  const cols = [...scout.matchAll(/^\s*\['([a-z0-9]+)', '([a-zA-Z0-9]+)', (?:'([^']+)'|`([^`]+)`)/gm)]
+    .map((m) => ({ header: m[1], field: m[2], spec: m[3] ?? m[4] ?? '' }));
+  if (!colsBlock || cols.length !== rows) {
+    fail(`the COLUMNS table has ${rows} rows but the guard could read ${cols.length}: fix the pattern before trusting the checks below`);
+  }
+  const headers = new Set(cols.map((c) => c.header));
+  // The card editor's own min/max, read out of the one table that builds the inputs.
+  const editor = new Map();
+  const specBlock = ui.match(/const SPEC_FIELDS = \[([\s\S]*?)\n\];/);
+  if (!specBlock) fail('ui.js has no SPEC_FIELDS block to hold the importer against');
+  for (const m of (specBlock ? specBlock[1] : '').matchAll(/key: [`']([a-zA-Z]+(?:\$\{lv\})?)[`'],[\s\S]{0,320}?min: ([\d.]+),\s*max: ([\d.]+)/g)) {
+    if (m[1].includes('${lv}')) {
+      const pfx = m[1].startsWith('place') ? 'place' : 'drop';
+      for (const lv of ['L1', 'L2', 'L3', 'L4']) editor.set(`${pfx}${lv}`, [Number(m[2]), Number(m[3])]);
+    } else editor.set(m[1], [Number(m[2]), Number(m[3])]);
+  }
+  if (editor.size < 14) fail(`the card editor reads as ${editor.size} numbered fields — the regex has lost the table`);
+  for (const c of cols) {
+    const m = c.spec.match(/^(?:range|count|pct):([\d.]+):([\d.]+)$/);
+    if (!m) continue;
+    const [lo, hi] = [Number(m[1]), Number(m[2])];
+    const e = editor.get(c.field);
+    if (!e) {
+      if (!['weightLb', 'armSec', 'coralPerMatch', 'teleopCoral', 'bargePoints', 'netLift'].includes(c.field)) {
+        fail(`scouting writes ${c.field} ${lo}-${hi}, which the card editor has no input for and no derivation explains`);
+      }
+      continue;
+    }
+    if (lo < e[0] || hi > e[1]) fail(`scouting lets ${c.field} go to ${lo}-${hi} but the card can only be set to ${e[0]}-${e[1]} — the panel would show a value it cannot edit`);
+  }
+  // Aliases. A second spelling of the same thing is fine; an alias that lands on another column's header, or
+  // that points at a name the table does not have, is a silent change of meaning or a silent nothing.
+  const aliasBlock = scout.match(/for \(const \[alias, header\] of \[([\s\S]*?)\]\) \{/);
+  if (!aliasBlock) fail('scouting.js has no header-alias loop to check');
+  const aliasTo = new Map();
+  for (const m of (aliasBlock ? aliasBlock[1] : '').matchAll(/\['([a-z0-9_]+)', '([a-z0-9_]+)'\]/g)) {
+    const key = normOf(m[1]);
+    if (!headers.has(m[2])) fail(`alias "${m[1]}" points at "${m[2]}", which is not a column — the alias does nothing`);
+    if (headers.has(key) && key !== m[2]) fail(`alias "${m[1]}" normalizes to ${key}, another column's header — it would be overwritten`);
+    if (aliasTo.has(key) && aliasTo.get(key) !== m[2]) fail(`two spellings normalize to ${key} and mean different columns (${aliasTo.get(key)} and ${m[2]})`);
+    aliasTo.set(key, m[2]);
+  }
+  // Refusals: keyed the way `norm` reads, never reaching for a name the table owns.
+  const refBlock = scout.match(/const REFUSALS = \{([\s\S]*?)\n\};/);
+  if (!refBlock) fail('scouting.js has no REFUSALS table, so a column it refuses by design reads as an unrecognised one');
+  for (const m of (refBlock ? refBlock[1] : '').matchAll(/^\s*'?([a-z0-9_]+)'?: '/gm)) {
+    // Underscores are matched *so they can be reported*: a pattern of only [a-z0-9] would skip the one key
+    // written in the wrong form, which is precisely the mistake this rule exists to catch.
+    const key = m[1];
+    if (normOf(key) !== key) fail(`REFUSALS key "${key}" contains punctuation that norm() strips — its reason would never be found`);
+    if (headers.has(key) || aliasTo.has(key)) fail(`REFUSALS refuses "${key}" while the column table also reads it`);
+  }
+  // The derived columns are not card fields, so they must be explained in `toCard` and absent from its whitelist.
+  const toCard = scout.match(/export function toCard\([\s\S]*?\n\}/)?.[0] || '';
+  if (!toCard) fail('scouting.js has no toCard function to inspect');
+  const whitelist = (toCard.match(/for \(const k of \[([^\]]*)\]/) || [])[1] || '';
+  for (const derived of ['armSec', 'coralPerMatch', 'teleopCoral', 'bargePoints', 'netLift']) {
+    if (!toCard.includes(`row.${derived}`)) fail(`${derived} is a derived column that toCard never reads — it would land on the card as a wire name nothing runs`);
+    if (whitelist.includes(`'${derived}'`)) fail(`${derived} is not a profile field and must not be copied onto a card`);
+  }
+  for (const k of ['key', 'ref', 'pieces']) {
+    if (!toCard.includes(`delete out.${k};`)) fail(`toCard no longer strips provenance key ${k} off an imported card`);
+  }
+  if (!/scaleProfile\(base, /.test(toCard)) fail('toCard no longer honours a per-MATCH CORAL rate through the same scaleProfile model.js uses for its presets');
+  if (!scout.includes('REF_CORAL_PER_ROBOT')) fail('scouting.js no longer uses the reference CORAL rate model.js fits its presets with');
+  if (!/export const REF_CORAL_PER_ROBOT/.test(fs.readFileSync(path.join(ROOT, JS_DIR, 'model.js'), 'utf8'))) fail('model.js keeps REF_CORAL_PER_ROBOT private, so the importer has to invent its own');
+  // The page side: one button, one hidden input, one report, all wired.
+  for (const id of ['btn-import-scouting', 'inp-scouting', 'import-report', 'import-notes']) {
+    const n = (html.match(new RegExp(`id="${id}"`, 'g')) || []).length;
+    if (n !== 1) fail(`#${id} appears ${n} times in index.html, expected once`);
+    if (!ui.includes(`'${id}'`)) fail(`ui.js never touches #${id}`);
+  }
+  const scoutImport = ui.match(/import \{[^}]*\} from '\.\/scouting\.js'/)?.[0] || '';
+  for (const fn of ['parseScouting', 'placeRosters']) {
+    if (!scoutImport.includes(fn)) fail(`ui.js does not import ${fn} from scouting.js`);
+  }
+  if (!/function importScouting/.test(ui) || !/void importScouting\(/.test(ui)) fail('nothing calls importScouting, so the button is decoration');
+  if (!/function reportImport/.test(ui)) fail('the import has no report block, so a clamped or refused column cannot be read back');
+  // And somebody has to test the mapping, because every assertion above is a string comparison — the only way
+  // to know a header lands on the right *value* is to parse a file and read the card back.
+  const tests = fs.readFileSync(path.join(ROOT, 'scripts', 'runtime.test.mjs'), 'utf8');
+  if (!tests.includes('scouting.js')) fail('nothing imports scouting.js in the tests: a column can map to the wrong field and stay green');
+}
+
 console.log(bad === 0 ? `OK: ${files.length} files are UTF-8 clean and index.html tags balance.` : `${bad} problem(s).`);
 process.exit(bad === 0 ? 0 : 1);

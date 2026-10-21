@@ -144,11 +144,18 @@
              the autosave would not. Long explanations live in web/js/statestore.js and README.md. -->
         <div class="store-row">
           <button class="btn" id="btn-copy-link" type="button" title="Write this setup into the address bar as a link and copy it. Anyone who opens it lands on the same six cards, switches and seed.">Copy setup link</button>
-          <button class="btn" id="btn-import-scouting" type="button" title="Fill the six cards from a scouting CSV: team, auto CORAL, teleop CORAL, NET ALGAE, BARGE points. Columns are listed in README.md.">Import scouting CSV</button>
+          <button class="btn" id="btn-import-scouting" type="button" title="Fill the six cards from a scouting or Statbotics CSV: team, drivetrain, drive speed, auto_coral, teleop_coral, arm_s, place/drop per level, NET reach, climb, barge_points, reliability. The columns it refuses and why are in the report it prints; the full list is in README.md.">Import scouting CSV</button>
           <input type="file" id="inp-scouting" accept=".csv,text/csv,text/plain" class="visually-hidden" aria-label="Scouting CSV file" />
           <button class="btn" id="btn-forget" type="button" title="Delete the saved setup from this browser. The page you are looking at does not change.">Forget saved setup</button>
           <span class="hint" id="setup-store" role="status" aria-live="polite"></span>
         </div>
+        <!-- An import hands back a receipt, not a summary: every number it clamped, every column it refused on
+             purpose and every clock it derived is a fact about the team's own data. It is collapsed because it
+             is a receipt; the columns it reads are listed in README.md. -->
+        <details class="import-report" id="import-report" hidden>
+          <summary>what the file did</summary>
+          <ul id="import-notes"></ul>
+        </details>
       </section>
 
       <section class="panel field-panel" aria-labelledby="h-field">

@@ -225,6 +225,12 @@ code { font-family: var(--mono); font-size: 0.92em; color: var(--accent); }
    the remaining width and truncates rather than pushing the buttons onto their own lines. */
 .store-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 .store-row .hint { flex: 1; min-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The receipt an imported CSV leaves behind, styled like the other collapsed block on the panel. The list is
+   the file's own row numbers, so it wraps instead of truncating. */
+.import-report { margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); }
+.import-report summary { cursor: pointer; padding: 8px 10px; font-size: 12px; color: var(--dim); }
+.import-report ul { margin: 0; padding: 4px 10px 10px 28px; font-size: 11px; color: var(--dim); line-height: 1.45; }
+.import-report li { margin: 2px 0; }
 .progress { flex: 1; min-width: 140px; height: 16px; border: 1px solid var(--line); border-radius: 8px; position: relative; overflow: hidden; background: #0f1620; }
 .progress .bar { height: 100%; width: 0%; background: var(--blue); transition: width 0.15s linear; }
 .progress span { position: absolute; inset: 0; display: grid; place-items: center; font-size: 11px; color: var(--text); }
