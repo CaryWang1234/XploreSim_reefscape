@@ -9,7 +9,7 @@
 //   node scripts/audit.mjs .tmp/measurements.txt
 //
 // It writes to `.tmp/`, which is gitignored on purpose: a committed dump of one noisy run becomes an authority
-// nobody refreshes, and each script here takes ten to twenty minutes. `.tmp/` keeps it what it is — the output of
+// nobody refreshes, and each script here takes tens of minutes. `.tmp/` keeps it what it is — the output of
 // a command you can rerun.
 //
 //   node scripts/record.mjs                     # everything

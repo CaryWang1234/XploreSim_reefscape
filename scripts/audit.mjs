@@ -11,7 +11,7 @@
 //   1. the number appears in a committed source file — a rule constant, a default knob, an engine bound;
 //   2. the paragraph it sits in names the committed command that prints it (`npm run measure`, `npm run rp`,
 //      `scripts/cards.mjs`, …), and that command exists in package.json — the measurement scripts each take
-//      ten to twenty minutes, so the value itself is not committed and the citation is what a reader can rerun;
+//      tens of minutes, so the value itself is not committed and the citation is what a reader can rerun;
 //   3. it is accounted for in `docs/uncited-numbers.txt`, the debt ledger: a claim whose measurement lives in a
 //      probe nobody committed. The ledger can only shrink — a line whose claim has been repaired is a failure too.
 //

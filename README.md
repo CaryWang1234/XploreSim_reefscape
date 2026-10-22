@@ -1114,8 +1114,9 @@ policed, because a rules table is made of them and a check that flags `12 branch
 citations (`§6.5.1`, `Table 6-2`) and rule numbers (`R103`, `G303-D`) are stripped before scanning, since `6.5`
 inside a clause name is not a measurement.
 
-The citation branch exists because the measurement scripts each take ten to twenty minutes: a value cannot be
-committed without becoming an authority nobody refreshes. `npm run record` writes them to `.tmp/measurements.txt`
+The citation branch exists because the measurement scripts are slow — `npm run verify` is the fifteen-minute one and
+`npm run rp` took over forty on this machine — so a value cannot be committed without becoming an authority nobody
+refreshes. `npm run record` writes them to `.tmp/measurements.txt`
 (gitignored), and passing that file to the audit upgrades the check from "the paragraph names a command" to "the
 command printed that number on this machine".
 
@@ -1207,7 +1208,7 @@ have been read**, and `npm run rp` regrades a real batch against Table 6-2 if wh
 | --- | --- |
 | `npm run serve` | static preview of `web/` on loopback |
 | `npm run check` | UTF-8 clean, tag balance, every module parses, and the page's contracts (the RP legend, the card ranges against the CSV importer's table, the codec's switch map, the example scouting file) |
-| `npm test` | the setup codec and the scouting parser, run outside a browser — 23 tests, each mutation-checked |
+| `npm test` | the setup codec and the scouting parser, run outside a browser — 23 tests, and seven mutations of the importer each turn one of them red |
 | `npm run audit` | every decimal and digest in the prose is in the code, cited to a committed command, or exempt with a reason |
 | `npm run validate` | check + test + audit + verify + rp: everything that has to be true before a push |
 | `npm run verify` | invariants, golden replay, mirror, ablation, baseline separation, the planner's two assertions |
@@ -1220,4 +1221,4 @@ have been read**, and `npm run rp` regrades a real batch against Table 6-2 if wh
 | `npm run aicap` | the ceiling on each plan axis: every arm as a fixed rule, then what hindsight over the arms says a policy could still win |
 | `npm run strength` | the planner against the shipped baseline AND against the best fixed rule — twice, once against the rule as it was measured and once against the same rule with the station queue priced in — both seat orders, then the same yardsticks against a field that presses, strips or does both |
 | `npm run adaptive` | whether re-planning beats a fixed commit once the MATCH's pace varies |
-| `npm run record` | re-run the measurement scripts into `.tmp/measurements.txt`, for `npm run audit` to check *values* instead of citations (ten to twenty minutes each) |
+| `npm run record` | re-run the measurement scripts into `.tmp/measurements.txt`, for `npm run audit` to check *values* instead of citations (each of them takes tens of minutes) |

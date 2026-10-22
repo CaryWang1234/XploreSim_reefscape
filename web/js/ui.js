@@ -566,7 +566,9 @@ function reportImport(lines) {
     list.appendChild(li);
   }
   box.hidden = false;
-  box.open = true;
+  // Open while it is a receipt a team wants to read; collapsed once it is long enough to push the FIELD off
+  // the screen, because the summary line already says how many notes there are.
+  box.open = lines.length <= 14;
   box.querySelector('summary').textContent = `what the file did · ${lines.length} note${lines.length === 1 ? '' : 's'}`;
 }
 
