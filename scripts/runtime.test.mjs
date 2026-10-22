@@ -573,3 +573,38 @@ test('a file is read as a file: separators, comments and a header with nothing u
   assert.deepEqual(blanks.problems, [], `an empty cell was read as a bad one: ${blanks.problems.join(' · ')}`);
 });
 
+// `.tmp/measurements.txt` is merged section by section so that `--only rp` can refresh one block of a record that
+// took an hour to build. The merge is where it used to lose data: the section reader looked ahead for the next
+// marker `\Z`, which in JavaScript is not an anchor but the letter Z, so the last section never matched and was
+// dropped on every refresh.
+import { parseRecord, renderRecord } from './record_sections.mjs';
+
+test('a measurement record keeps every section, the last one included', () => {
+  const header = '# written by npm run record\n';
+  const file = renderRecord(new Map([
+    ['verify', '# verify: 795 s on this machine under v24\nAll invariants hold.\n'],
+    ['rp', 'the ladder regrades.\n'],
+    ['adaptive', 'last section, nothing after it.\n'],
+  ]), header);
+  const back = parseRecord(file);
+  assert.deepEqual([...back.keys()], ['verify', 'rp', 'adaptive'], 'a section went missing in the round trip');
+  // The blank line is part of the format — the writer puts one after every section, including the last — so a body
+  // comes back with it. What the test is about is that the last section is read at all.
+  assert.equal(back.get('adaptive'), 'last section, nothing after it.\n\n', 'the last section is not a special case');
+  assert.ok(back.get('verify').startsWith('# verify: 795 s'), 'the elapsed figure did not survive the merge');
+  assert.equal(renderRecord(back, header), file, 're-rendering a parsed record is not the identity it has to be');
+});
+
+test('refreshing one section leaves the others alone', () => {
+  const blocks = parseRecord(renderRecord(new Map([['rp', 'old rp output\n'], ['cards', 'old cards output\n']])));
+  blocks.set('rp', '# rp: 2512 s on this machine under v24\nnew rp output\n');
+  const text = renderRecord(blocks);
+  assert.equal(parseRecord(text).get('cards'), 'old cards output\n\n');
+  assert.equal(parseRecord(text).size, 2, 'a refresh grew or shrank the record');
+  assert.equal(parseRecord(parseRecord(text).get('rp')).size, 0, 'a section body is not a record');
+  // A file that is only its header, or that does not exist yet, is an empty record and not a broken one.
+  assert.equal(parseRecord('').size, 0);
+  assert.equal(parseRecord('# only a header\n').size, 0);
+  assert.deepEqual([...parseRecord('==== orphan ====\n').entries()], [['orphan', '']]);
+});
+

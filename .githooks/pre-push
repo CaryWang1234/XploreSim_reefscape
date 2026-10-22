@@ -6,15 +6,16 @@
 # What it runs, and why in two speeds. `check`, `test` and `audit` are the static layer: encoding, tag balance,
 # every module parses, the page's contracts (the RP legend, the card ranges against the CSV importer's table, the
 # codec's switch map), the runtime tests that attack the setup decoder and the scouting parser, and the rule that
-# a decimal or a digest published in the prose exists in the code or in docs/measurements.txt. Together they take
-# about ten seconds and they are what a careless edit actually breaks.
+# a decimal or a digest published in the prose exists in the code, is cited to a committed command, or sits in the
+# gitignored .tmp/measurements.txt. The static layer is about ten seconds — the last line of its run prints the real
+# figure, so the documented number cannot quietly go stale — and it is what a careless edit actually breaks.
 #
 # `verify` is the engine layer — about fifty invariants, the eight golden replay digests and the ablation ladder —
-# and it takes ten to fifteen minutes. It is the only thing that catches a physics change, so it runs whenever the
-# push range touches the engine. Set ENGINE=1 to force it or ENGINE=0 to skip it; the line it prints says which
-# path ran, so a reviewer of the push can see that the physics was not checked. `npm run rp` and `npm run cards`
-# are longer and are not in the hook: their numbers reach the documentation through `npm run record` and are held
-# by `npm run audit`, which runs here every time.
+# and it took thirteen minutes on the machine this was written on. It is the only thing that catches a physics
+# change, so it runs whenever the push range touches the engine. Set ENGINE=1 to force it or ENGINE=0 to skip it;
+# the line it prints says which path ran, so a reviewer of the push can see that the physics was not checked.
+# `npm run rp` and `npm run cards` are longer and are not in the hook: their numbers reach the documentation through
+# `npm run record` and are held by `npm run audit`, which runs here every time.
 
 set -e
 cd "$(git rev-parse --show-toplevel)" || exit 1
@@ -33,13 +34,17 @@ if [ -z "$ENGINE" ]; then
 fi
 
 echo "pre-push: static layer (check + test + audit)"
+T0=$(date +%s)
 npm run check
 npm test
 npm run audit
+echo "pre-push: static layer clean in $(( $(date +%s) - T0 )) s"
 
 if [ "$ENGINE" = "1" ]; then
-  echo "pre-push: the range touches the engine — running scripts/invariants.mjs (10-15 minutes)"
+  echo "pre-push: the range touches the engine — running scripts/invariants.mjs (about thirteen minutes)"
+  E0=$(date +%s)
   npm run verify
+  echo "pre-push: engine layer clean in $(( $(date +%s) - E0 )) s"
 else
   echo "pre-push: the range touches no engine file — engine layer skipped (npm run validate runs everything)"
 fi

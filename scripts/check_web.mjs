@@ -384,6 +384,36 @@ for (const name of fs.readdirSync(path.join(ROOT, 'scripts'))) {
   }
   if (!readme.includes('npm run audit')) fail('README never tells a reader how the prose numbers are held');
   if (pkg.scripts.all) fail('package.json still defines `all`, which nothing documents — `validate` is the full sweep');
+  // The record has to know every script that prints a number the prose can cite. A measurement added to
+  // package.json and forgotten in `record.mjs` is citable by the audit but never value-checked, which is the
+  // quiet half of the failure — it does not even look broken.
+  const notMeasured = new Set(['check', 'test', 'audit', 'record', 'serve', 'validate']);
+  const recordSrc = fs.readFileSync(path.join(ROOT, 'scripts/record.mjs'), 'utf8');
+  for (const [name, cmd] of Object.entries(pkg.scripts)) {
+    if (notMeasured.has(name)) continue;
+    const file = (cmd.match(/node (\S+\.mjs)/) || [])[1];
+    if (file && !recordSrc.includes(file)) {
+      fail(`npm run ${name} runs ${file}, whose numbers the prose can cite, but record.mjs does not record it — add it to SCRIPTS`);
+    }
+  }
+  for (const m of recordSrc.matchAll(/\['([a-z]+)',\s*'([^']+)'\]/g)) {
+    const [, name, file] = m;
+    if (!fs.existsSync(path.join(ROOT, file))) fail(`record.mjs would run ${file} for ${name} and there is no such file`);
+    if (!pkg.scripts[name]) fail(`record.mjs records ${name} as ${file}, but package.json has no \`npm run ${name}\``);
+  }
+  // A record section that carries no timing is a section the runtimes in README cannot be checked against.
+  if (!/blocks\.set\(name, `# \$\{name\}: \$\{sec\} s/.test(recordSrc)) {
+    fail('record.mjs no longer writes how long each section took; the documented runtimes have no print');
+  }
+  // The auditor must not be its own evidence: its comments carry measurement-shaped examples to explain the rules,
+  // and if those counted as a source, typing an example would waive the claim it describes.
+  const auditSrc = fs.readFileSync(path.join(ROOT, 'scripts/audit.mjs'), 'utf8');
+  if (!/&& f !== 'audit\.mjs'/.test(auditSrc)) {
+    fail('audit.mjs reads itself as evidence, so a decimal written in its comments would excuse that number in the prose');
+  }
+  if (!/filter\(\(l\) => !l\.startsWith\('#'\)\)/.test(auditSrc)) {
+    fail('audit.mjs no longer drops the record\'s `#` lines before reading its numbers; a Node version string would print a value');
+  }
 }
 
 console.log(bad === 0 ? `OK: ${files.length} files are UTF-8 clean and index.html tags balance.` : `${bad} problem(s).`);

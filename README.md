@@ -14,13 +14,14 @@ assume.
 ```
 npm run serve      # http://127.0.0.1:4188
 npm run check      # encoding, HTML tag balance, every module parses, the page's contracts
-npm test           # the setup codec and the scouting parser, run outside a browser
+npm test           # the setup codec, the scouting parser and the measurement record, outside a browser
 npm run audit      # every decimal in the prose is in the code, or cited to a command that prints it
 npm run validate   # check + test + audit + verify + rp: everything except the long A/B sweeps
 npm run verify     # engine invariants, the golden replay fingerprint, the mirror, the planner
 npm run rp         # regrade a real batch's Ranking Points against Table 6-2, MATCH by MATCH
 npm run cards      # what §6.6.2's card ladder costs, on the arms where it actually fires
 npm run measure    # the A/B numbers quoted on the page, each with its n
+npm run chassis    # what each drivetrain is worth a MATCH, paired, on two seed bases and both seat orders
 npm run headroom   # which allocation levers the tick engine actually responds to
 npm run contact    # the collision-severity distribution the contact fouls are thresholded against
 npm run fastsim    # does the analytic model rank plans the way the engine does
@@ -48,12 +49,15 @@ heading that is integrated under its drivetrain's turn rate and an angular-accel
 meets is separated on a separating axis by inverse mass and trades momentum along the normal; the REEF is
 its convex hexagon, not its inscribed circle; and LEAVE and PARK are judged on the BUMPERS (§6.5.2), which
 is what actually crosses the line. `swerve` / `tank` / `mecanum` set the sideways and reverse fractions,
-and the choice is worth about 20 points a MATCH (swerve 271.8 against tank 251.4 in the guard's n=16 mirror;
-played as a 24-MATCH mirror each, swerve reads 273.6 ± 2.7 blue and 272.1 ± 2.4 red and tank
-248.2 ± 2.9 and 246.2 ± 3.0). `mecanum` is within error of swerve — 274.4 ± 2.4 and 273.8 ± 2.9 against
-273.6 ± 2.7 and 272.1 ± 2.4 — and none of the three has a seat advantage to claim: the margins each fleet runs
-against itself are swerve's 1.50 ± 2.97, tank's 2.00 ± 4.68 and mecanum's 0.58 ± 3.73, every one of them inside
-its own error bar. Both the spin ramp and the
+and the choice is worth about 24 points a MATCH — `npm run chassis` prices it as a paired mirror, each drivetrain
+run as its own n=24 fleet on two seed bases, reading **+25.7 ± 2.0** on the 9000 base and **+23.2 ± 2.1** on the
+21000 (all-swerve 273.6 ± 2.7 blue against all-tank 248.2 ± 2.9). `mecanum` is within error of swerve on both bases
+(+1.3 ± 2.1, +2.9 ± 3.0): at these tempos partial strafing is already enough, so the cliff the model finds is at
+"no sideways at all", not at "some". No drivetrain has a seat to claim — the margins each fleet runs against itself
+(swerve 1.5 ± 3.0, tank 2.0 ± 4.7, mecanum 0.6 ± 3.7 on the 9000 base; 1.6, 1.8 and 4.3 on the other) all sit
+inside their own error bars — and the head-to-head, played in both seat orders because this engine is not
+left-right symmetric, returns the same gap the mirrors do (26.1 ± 2.1 against 25.7 ± 2.0) with the seating itself
+worth 0.4 ± 3.1. Both the spin ramp and the
 momentum exchange have
 an off value in the page's advanced column, so each is a measured arm rather than an assumption — and so does
 the escape from a corner pile-up (`unstickOff`): three ROBOTS can pin each other against the ALLIANCE wall at
@@ -1114,17 +1118,43 @@ policed, because a rules table is made of them and a check that flags `12 branch
 citations (`§6.5.1`, `Table 6-2`) and rule numbers (`R103`, `G303-D`) are stripped before scanning, since `6.5`
 inside a clause name is not a measurement.
 
-The citation branch exists because the measurement scripts are slow — `npm run verify` is the fifteen-minute one and
-`npm run rp` took over forty on this machine — so a value cannot be committed without becoming an authority nobody
-refreshes. `npm run record` writes them to `.tmp/measurements.txt`
+Evidence is then read as a *number*, not as a substring. Two things were wrong with the substring: `76.0%` typed
+into a comment to explain the rules was counted as the source of a `6.0` claimed somewhere else, and a paragraph
+quoting `2.50` failed to match the `2.5` a table printed. Both readings are now anchored at the digit run, so
+`2.50` is `2.5` and nothing matches inside a longer number — and `audit.mjs` is excluded from its own evidence,
+because its comments are full of measurement-shaped examples and counting them would mean that writing an example
+down waives the claim it describes. `npm run check` holds both of those in place.
+
+The citation branch exists because the measurement scripts are slow — `npm run verify` took thirteen minutes on
+this machine for this round's code, and `npm run rp` took over forty — so a value cannot be committed without
+becoming an authority nobody refreshes. `npm run record` writes them to `.tmp/measurements.txt`
 (gitignored), and passing that file to the audit upgrades the check from "the paragraph names a command" to "the
-command printed that number on this machine".
+command printed that number on this machine" — matched section by section, not against the whole file, because a
+record of ten slow scripts prints thousands of decimals and letting any one of them excuse any claim would be a pass
+that means nothing. The record is one section per measurement script, and `npm run check`
+holds that list in sync with `package.json` in both directions: a script the prose can cite but the record does not
+run is a number that will never be value-checked, which is the failure you cannot see in the output. Each section
+starts with how long that script took, so the runtimes quoted above are prints rather than recollections — and the
+codec that merges a refresh into an existing record is tested on its own (`scripts/record_sections.mjs`), because
+its first version read the last section as nothing at all: `\Z` in a JavaScript regex is the letter Z, not an
+end-of-string anchor, so `--only rp` was quietly dropping whichever block happened to sit last.
 
 What is left when a claim has neither is written down rather than waved through: `docs/uncited-numbers.txt` holds
-85 such numbers today, each with the sentence that makes the claim. The audit fails on a number missing from that
-list and fails on a list line whose claim has been repaired, so the debt can only shrink — which is what
+96 such numbers today. The count moved twice in one round, and both moves are the point: promoting
+`scripts/chassis.mjs` paid off ten claims that had been quoted from a deleted terminal buffer, while reading
+evidence as numbers instead of substrings uncovered 26 that had been passing because they were a piece of somebody
+else's longer figure — and five were paid off the moment `16.50` was recognised as the `16.5` that `model.js`
+defines. Each line carries the sentence that makes the claim. The audit fails on a number missing from that list and
+fails on a list line whose claim has been repaired, so between rebuilds the debt can only shrink — which is what
 `scripts/rp.mjs` and `scripts/cards.mjs` were for their two rounds: a probe that kept printing a number became a
 committed script, and the paragraph cites it now.
+
+What the record mode said the first time it was run over a complete record: 125 prose lines matched what the command
+in their own paragraph printed on this machine, and 35 did not. Each of those 35 is a number whose paragraph names a
+script whose output no longer contains it — the class of error a citation cannot see, because the citation is still
+true of the command and false of the sentence. They are listed by line with the command that failed to print them,
+and working through them is the next re-anchor. `npm run audit` without a record stays green so that a thirteen-minute
+sweep is never a precondition for editing prose.
 
 `npm run check` holds the adjacent drift: every command named in this file or on the page as something to run must
 be a script that exists; the encoding scan covers the prose and the measurement scripts, not just the page; and the
@@ -1132,9 +1162,10 @@ contracts that no browser would notice — the RP legend generated from `POINTS`
 the card editor's own `SPEC_FIELDS`, the codec's `SWITCHES` against `ui.js`'s `SWITCH_IDS`, the example scouting
 file against the README's column table — are compared as text.
 
-`.githooks/pre-push` runs the static trio — `check`, `test`, `audit` — on every push, and brings in `npm run verify`
-— the invariants, the golden digests, the ablation ladder, ten to fifteen minutes — only when the push range
-touches an engine file. It is not enabled by a clone: `git config core.hooksPath .githooks`, once per machine.
+`.githooks/pre-push` runs the static trio — `check`, `test`, `audit` — on every push, ten seconds of it, and brings
+in `npm run verify` — the invariants, the golden digests, the ablation ladder, thirteen minutes — only when the push
+range touches an engine file. The hook prints the elapsed figure for both, so neither number can go stale without
+the run saying so. It is not enabled by a clone: `git config core.hooksPath .githooks`, once per machine.
 
 ## The setup is bytes: an autosave, a link, a CSV in
 
@@ -1208,17 +1239,18 @@ have been read**, and `npm run rp` regrades a real batch against Table 6-2 if wh
 | --- | --- |
 | `npm run serve` | static preview of `web/` on loopback |
 | `npm run check` | UTF-8 clean, tag balance, every module parses, and the page's contracts (the RP legend, the card ranges against the CSV importer's table, the codec's switch map, the example scouting file) |
-| `npm test` | the setup codec and the scouting parser, run outside a browser — 23 tests, and seven mutations of the importer each turn one of them red |
+| `npm test` | the setup codec, the scouting parser and the measurement record, run outside a browser — 25 tests, and seven mutations of the importer plus two of the record's section codec each turn one of them red |
 | `npm run audit` | every decimal and digest in the prose is in the code, cited to a committed command, or exempt with a reason |
 | `npm run validate` | check + test + audit + verify + rp: everything that has to be true before a push |
 | `npm run verify` | invariants, golden replay, mirror, ablation, baseline separation, the planner's two assertions |
 | `npm run rp` | regrade a real batch's Ranking Points against Table 6-2, MATCH by MATCH, and say which rungs discriminate |
 | `npm run cards` | what §6.6.2's card ladder costs, on the arms where it actually fires |
 | `npm run measure` | the A/B blocks behind the numbers printed on the page |
+| `npm run chassis` | what each drivetrain is worth a MATCH — n=24 paired mirrors on two seed bases, the margin each fleet runs against itself, and the head-to-head played in both seat orders |
 | `npm run headroom` | what each allocation knob is worth in the engine, before anything is built on it |
 | `npm run contact` | the collision-severity distribution the §7.4.4 thresholds are placed against |
 | `npm run fastsim` | does the analytic model rank plans the way the engine does (pairwise, with error bars) |
 | `npm run aicap` | the ceiling on each plan axis: every arm as a fixed rule, then what hindsight over the arms says a policy could still win |
 | `npm run strength` | the planner against the shipped baseline AND against the best fixed rule — twice, once against the rule as it was measured and once against the same rule with the station queue priced in — both seat orders, then the same yardsticks against a field that presses, strips or does both |
 | `npm run adaptive` | whether re-planning beats a fixed commit once the MATCH's pace varies |
-| `npm run record` | re-run the measurement scripts into `.tmp/measurements.txt`, for `npm run audit` to check *values* instead of citations (each of them takes tens of minutes) |
+| `npm run record` | re-run the measurement scripts into `.tmp/measurements.txt`, for `npm run audit` to check *values* instead of citations; each section carries how long its script took — thirteen minutes for `verify`, over forty for `rp` on this machine |
