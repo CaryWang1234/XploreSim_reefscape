@@ -1,0 +1,47 @@
+#!/bin/sh
+# Push guard for the 2025 REEFSCAPE build. Enable it per clone — the repo cannot and should not do that for you:
+#
+#   git config core.hooksPath .githooks
+#
+# What it runs, and why in two speeds. `check`, `test` and `audit` are the static layer: encoding, tag balance,
+# every module parses, the page's contracts (the RP legend, the card ranges against the CSV importer's table, the
+# codec's switch map), the runtime tests that attack the setup decoder and the scouting parser, and the rule that
+# a decimal or a digest published in the prose exists in the code or in docs/measurements.txt. Together they take
+# about ten seconds and they are what a careless edit actually breaks.
+#
+# `verify` is the engine layer — about fifty invariants, the eight golden replay digests and the ablation ladder —
+# and it takes ten to fifteen minutes. It is the only thing that catches a physics change, so it runs whenever the
+# push range touches the engine. Set ENGINE=1 to force it or ENGINE=0 to skip it; the line it prints says which
+# path ran, so a reviewer of the push can see that the physics was not checked. `npm run rp` and `npm run cards`
+# are longer and are not in the hook: their numbers reach the documentation through `npm run record` and are held
+# by `npm run audit`, which runs here every time.
+
+set -e
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+ENGINE_PATHS="web/js/engine.js web/js/policy.js web/js/ai.js web/js/model.js web/js/rules.js web/js/league.js web/js/fastsim.js scripts/invariants.mjs scripts/rp.mjs scripts/cards.mjs"
+
+# What is about to leave this machine: the upstream branch if there is one, otherwise the last commit.
+if [ -z "$ENGINE" ]; then
+  BASE=$(git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || true)
+  if [ -n "$BASE" ]; then RANGE="$BASE...HEAD"; else RANGE="HEAD~1..HEAD"; fi
+  CHANGED=$(git diff --name-only $RANGE 2>/dev/null || true)
+  ENGINE=0
+  for p in $ENGINE_PATHS; do
+    if printf '%s\n' "$CHANGED" | grep -q -x -F "$p"; then ENGINE=1; fi
+  done
+fi
+
+echo "pre-push: static layer (check + test + audit)"
+npm run check
+npm test
+npm run audit
+
+if [ "$ENGINE" = "1" ]; then
+  echo "pre-push: the range touches the engine — running scripts/invariants.mjs (10-15 minutes)"
+  npm run verify
+else
+  echo "pre-push: the range touches no engine file — engine layer skipped (npm run validate runs everything)"
+fi
+
+echo "pre-push: clear"

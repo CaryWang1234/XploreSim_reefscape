@@ -13,13 +13,19 @@ assume.
 
 ```
 npm run serve      # http://127.0.0.1:4188
-npm run check      # encoding, HTML tag balance, every module parses
+npm run check      # encoding, HTML tag balance, every module parses, the page's contracts
+npm test           # the setup codec and the scouting parser, run outside a browser
+npm run audit      # every decimal in the prose is in the code, or cited to a command that prints it
+npm run validate   # check + test + audit + verify + rp: everything except the long A/B sweeps
 npm run verify     # engine invariants, the golden replay fingerprint, the mirror, the planner
+npm run rp         # regrade a real batch's Ranking Points against Table 6-2, MATCH by MATCH
+npm run cards      # what §6.6.2's card ladder costs, on the arms where it actually fires
 npm run measure    # the A/B numbers quoted on the page, each with its n
 npm run headroom   # which allocation levers the tick engine actually responds to
 npm run contact    # the collision-severity distribution the contact fouls are thresholded against
 npm run fastsim    # does the analytic model rank plans the way the engine does
 npm run strength   # the planner against the shipped baseline and the best fixed rule
+npm run record     # re-run the measurement scripts into .tmp/ so the audit can check values, not citations
 ```
 
 ## What is modelled
@@ -1092,6 +1098,43 @@ alliance ledger, never to set it. The ROBOT footprint is now R104's 120 in perim
 no bumper allowance added, which is the rule's bound rather than a measured machine — real robots are
 rectangles with bumpers, and the square is what the perimeter permits, not what any team built.
 
+## Keeping the prose honest
+
+This README is 1100 lines of numbers, and a number whose source is a deleted terminal buffer is a rumour. Two
+failures here have been real: a caption that kept quoting an RP threshold after the constant moved, and a batch
+card that printed "conceded 0 points a MATCH" for weeks because the batch kept only the final score while
+`aggregate()` read the foul log. So the prose is checked, not trusted.
+
+`npm run audit` (`scripts/audit.mjs`) reads `README.md`, `web/index.html` and `OPTIMIZATION.md` and asks, of every
+decimal and every eight-hex fingerprint, for one of three things: the value appears in a committed source file (a
+rule constant, a default knob, an engine bound); or the paragraph it sits in names the committed command that
+prints it — `npm run measure`, `scripts/cards.mjs`, anything that is a real script in `package.json`; or it is in
+the exemption list with a reason, and a reason that no longer matches a line is itself a failure. Integers are not
+policed, because a rules table is made of them and a check that flags `12 branches` will be ignored. Clause
+citations (`§6.5.1`, `Table 6-2`) and rule numbers (`R103`, `G303-D`) are stripped before scanning, since `6.5`
+inside a clause name is not a measurement.
+
+The citation branch exists because the measurement scripts each take ten to twenty minutes: a value cannot be
+committed without becoming an authority nobody refreshes. `npm run record` writes them to `.tmp/measurements.txt`
+(gitignored), and passing that file to the audit upgrades the check from "the paragraph names a command" to "the
+command printed that number on this machine".
+
+What is left when a claim has neither is written down rather than waved through: `docs/uncited-numbers.txt` holds
+85 such numbers today, each with the sentence that makes the claim. The audit fails on a number missing from that
+list and fails on a list line whose claim has been repaired, so the debt can only shrink — which is what
+`scripts/rp.mjs` and `scripts/cards.mjs` were for their two rounds: a probe that kept printing a number became a
+committed script, and the paragraph cites it now.
+
+`npm run check` holds the adjacent drift: every command named in this file or on the page as something to run must
+be a script that exists; the encoding scan covers the prose and the measurement scripts, not just the page; and the
+contracts that no browser would notice — the RP legend generated from `POINTS`, the CSV importer's ranges against
+the card editor's own `SPEC_FIELDS`, the codec's `SWITCHES` against `ui.js`'s `SWITCH_IDS`, the example scouting
+file against the README's column table — are compared as text.
+
+`.githooks/pre-push` runs the static trio — `check`, `test`, `audit` — on every push, and brings in `npm run verify`
+— the invariants, the golden digests, the ablation ladder, ten to fifteen minutes — only when the push range
+touches an engine file. It is not enabled by a clone: `git config core.hooksPath .githooks`, once per machine.
+
 ## The setup is bytes: an autosave, a link, a CSV in
 
 Every card, switch, HUMAN PLAYER rate and seed on the setup panel is written to the browser's `localStorage` as
@@ -1163,8 +1206,13 @@ have been read**, and `npm run rp` regrades a real batch against Table 6-2 if wh
 | command | does |
 | --- | --- |
 | `npm run serve` | static preview of `web/` on loopback |
-| `npm run check` | UTF-8 clean, tag balance, every module parses |
+| `npm run check` | UTF-8 clean, tag balance, every module parses, and the page's contracts (the RP legend, the card ranges against the CSV importer's table, the codec's switch map, the example scouting file) |
+| `npm test` | the setup codec and the scouting parser, run outside a browser — 23 tests, each mutation-checked |
+| `npm run audit` | every decimal and digest in the prose is in the code, cited to a committed command, or exempt with a reason |
+| `npm run validate` | check + test + audit + verify + rp: everything that has to be true before a push |
 | `npm run verify` | invariants, golden replay, mirror, ablation, baseline separation, the planner's two assertions |
+| `npm run rp` | regrade a real batch's Ranking Points against Table 6-2, MATCH by MATCH, and say which rungs discriminate |
+| `npm run cards` | what §6.6.2's card ladder costs, on the arms where it actually fires |
 | `npm run measure` | the A/B blocks behind the numbers printed on the page |
 | `npm run headroom` | what each allocation knob is worth in the engine, before anything is built on it |
 | `npm run contact` | the collision-severity distribution the §7.4.4 thresholds are placed against |
@@ -1172,4 +1220,4 @@ have been read**, and `npm run rp` regrades a real batch against Table 6-2 if wh
 | `npm run aicap` | the ceiling on each plan axis: every arm as a fixed rule, then what hindsight over the arms says a policy could still win |
 | `npm run strength` | the planner against the shipped baseline AND against the best fixed rule — twice, once against the rule as it was measured and once against the same rule with the station queue priced in — both seat orders, then the same yardsticks against a field that presses, strips or does both |
 | `npm run adaptive` | whether re-planning beats a fixed commit once the MATCH's pace varies |
-| `npm run all` | check then verify |
+| `npm run record` | re-run the measurement scripts into `.tmp/measurements.txt`, for `npm run audit` to check *values* instead of citations (ten to twenty minutes each) |

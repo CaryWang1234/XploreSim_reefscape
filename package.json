@@ -6,8 +6,10 @@
   "description": "2025 FRC REEFSCAPE match simulator and tactical planner, modelled from the game manual.",
   "scripts": {
     "test": "node --test scripts/runtime.test.mjs",
-    "validate": "npm run check && npm test && npm run verify && npm run rp",
+    "validate": "npm run check && npm test && npm run audit && npm run verify && npm run rp",
     "check": "node scripts/check_web.mjs",
+    "audit": "node scripts/audit.mjs",
+    "record": "node scripts/record.mjs",
     "verify": "node scripts/invariants.mjs",
     "rp": "node scripts/rp.mjs",
     "cards": "node scripts/cards.mjs",
@@ -18,8 +20,7 @@
     "fastsim": "node scripts/fastsim.mjs",
     "strength": "node scripts/strength.mjs",
     "adaptive": "node scripts/adaptive.mjs",
-    "serve": "node scripts/serve.mjs",
-    "all": "node scripts/check_web.mjs && node scripts/invariants.mjs"
+    "serve": "node scripts/serve.mjs"
   },
   "engines": {
     "node": ">=20"

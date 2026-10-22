@@ -25,9 +25,15 @@ const TAGS = ['details', 'summary', 'div', 'p', 'label', 'select', 'option', 'st
 let bad = 0;
 const fail = (msg) => { console.log('FAIL ' + msg); bad++; };
 
-const files = [HTML, 'web/styles.css', 'package.json', '.gitignore']
+const files = [HTML, 'web/styles.css', 'package.json', '.gitignore', 'README.md', 'OPTIMIZATION.md']
   .map((f) => path.join(ROOT, f))
-  .concat(fs.readdirSync(path.join(ROOT, JS_DIR)).filter((f) => f.endsWith('.js')).map((f) => path.join(ROOT, JS_DIR, f)));
+  .concat(fs.readdirSync(path.join(ROOT, JS_DIR)).filter((f) => f.endsWith('.js')).map((f) => path.join(ROOT, JS_DIR, f)))
+  // The prose and the measurement scripts are where the Chinese and the §-citations live, and a shell redirect
+  // has turned a source file into mojibake twice here — so they get the same encoding scan as the page.
+  .concat(fs.readdirSync(path.join(ROOT, 'scripts')).filter((f) => f.endsWith('.mjs') || f.endsWith('.json')).map((f) => path.join(ROOT, 'scripts', f)))
+  .concat(fs.existsSync(path.join(ROOT, 'docs'))
+    ? fs.readdirSync(path.join(ROOT, 'docs')).map((f) => path.join(ROOT, 'docs', f))
+    : []);
 
 for (const f of files) {
   const rel = path.relative(ROOT, f).replace(/\\/g, '/');
@@ -35,6 +41,9 @@ for (const f of files) {
   const buf = fs.readFileSync(f);
   const txt = buf.toString('utf8');
   if (buf.includes(REPLACEMENT)) fail(`${rel} contains U+FFFD, the decoder replacement character`);
+  // The guard holds each mojibake sequence as a literal, so it would find them in itself; the sequences are what
+  // is being looked for, not evidence about this file. U+FFFD — a byte that never appears by accident — still is.
+  if (rel === 'scripts/check_web.mjs') continue;
   for (const pat of MOJIBAKE) if (txt.includes(pat)) fail(`${rel} contains ${JSON.stringify(pat)}: mojibake`);
 }
 
@@ -354,6 +363,27 @@ for (const name of fs.readdirSync(path.join(ROOT, 'scripts'))) {
     if (remarks.length) fail(`the example file does not parse cleanly: ${remarks.join(' · ')}`);
     for (const h of head) if (!readme.includes(`\`${h}\``)) fail(`the example carries the header "${h}" and README.md never lists it`);
   }
+}
+
+// Every `npm run …` this repo tells a reader to type has to be a script that exists, and the evidence the
+// numbers rest on has to be a file that exists. Both halves of that have drifted here: a `npm run all` outlived
+// the script it named, and README paragraphs outlived the terminal buffers that printed them.
+{
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  const readme = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
+  const cited = new Set();
+  for (const doc of [readme, html]) {
+    for (const m of doc.matchAll(/npm run ([a-zA-Z]+)/g)) cited.add(m[1]);
+  }
+  for (const name of cited) {
+    if (!pkg.scripts[name]) fail(`the page or README says \`npm run ${name}\` and package.json has no such script — found in: ${[readme, html].map((d) => (d.match(new RegExp('npm run ' + name + '\\b[^\\n]{0,40}', 'g')) || [])[0]).filter(Boolean).join(' | ').slice(0, 160)}`);
+  }
+  if (!/npm run audit/.test(pkg.scripts.validate || '')) fail('npm run validate skips the prose audit, so a stale number can ship');
+  for (const f of ['scripts/audit.mjs', 'scripts/record.mjs']) {
+    if (!fs.existsSync(path.join(ROOT, f))) fail(`${f} is missing: the measurement numbers in the prose have no check`);
+  }
+  if (!readme.includes('npm run audit')) fail('README never tells a reader how the prose numbers are held');
+  if (pkg.scripts.all) fail('package.json still defines `all`, which nothing documents — `validate` is the full sweep');
 }
 
 console.log(bad === 0 ? `OK: ${files.length} files are UTF-8 clean and index.html tags balance.` : `${bad} problem(s).`);

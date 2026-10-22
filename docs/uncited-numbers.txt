@@ -1,0 +1,93 @@
+# Claims in the prose that no committed file prints and no paragraph cites to a command
+# that does. Written by `node scripts/audit.mjs --write-baseline` on 2026-10-22.
+#
+# This list can only shrink: `npm run audit` fails on a number that is not in it, and fails on a line
+# in it whose claim has been repaired. The fix for a line here is to promote the probe that printed it
+# into a committed script and cite that script in the paragraph — which is what `scripts/rp.mjs` and
+# `scripts/cards.mjs` were for their two rounds.
+
+README.md          271.8      # README.md:51  and the choice is worth about 20 points a MATCH (swerve 271.8 against tank 251.4 in the guard's n=16 mirror;
+README.md          251.4      # README.md:51  and the choice is worth about 20 points a MATCH (swerve 271.8 against tank 251.4 in the guard's n=16 mirror;
+README.md          273.6      # README.md:52  played as a 24-MATCH mirror each, swerve reads 273.6 ± 2.7 blue and 272.1 ± 2.4 red and tank
+README.md          272.1      # README.md:52  played as a 24-MATCH mirror each, swerve reads 273.6 ± 2.7 blue and 272.1 ± 2.4 red and tank
+README.md          248.2      # README.md:53  248.2 ± 2.9 and 246.2 ± 3.0). `mecanum` is within error of swerve — 274.4 ± 2.4 and 273.8 ± 2.9 against
+README.md          246.2      # README.md:53  248.2 ± 2.9 and 246.2 ± 3.0). `mecanum` is within error of swerve — 274.4 ± 2.4 and 273.8 ± 2.9 against
+README.md          274.4      # README.md:53  248.2 ± 2.9 and 246.2 ± 3.0). `mecanum` is within error of swerve — 274.4 ± 2.4 and 273.8 ± 2.9 against
+README.md          273.8      # README.md:53  248.2 ± 2.9 and 246.2 ± 3.0). `mecanum` is within error of swerve — 274.4 ± 2.4 and 273.8 ± 2.9 against
+README.md          2.00       # README.md:55  against itself are swerve's 1.50 ± 2.97, tank's 2.00 ± 4.68 and mecanum's 0.58 ± 3.73, every one of them inside
+README.md          4.68       # README.md:55  against itself are swerve's 1.50 ± 2.97, tank's 2.00 ± 4.68 and mecanum's 0.58 ± 3.73, every one of them inside
+README.md          3.73       # README.md:55  against itself are swerve's 1.50 ± 2.97, tank's 2.00 ± 4.68 and mecanum's 0.58 ± 3.73, every one of them inside
+README.md          16.8       # README.md:76  **9.0 ± 3.3** points a MATCH for the model (16.8 ± 2.2 on a second seed base, 24/24 and 24/24 scores differ).
+README.md          9.4        # README.md:77  Letting a ROBOT that misses keep trying the same level instead of giving up on it buys nothing visible: 9.4 CORAL
+README.md          246.6      # README.md:111  scores `246.6 ± 2.4` instead of the default `268.7 ± 2.8`, and crippling the *opponent's* HUMAN PLAYER takes
+README.md          268.7      # README.md:111  scores `246.6 ± 2.4` instead of the default `268.7 ± 2.8`, and crippling the *opponent's* HUMAN PLAYER takes
+README.md          274.0      # README.md:112  the mirror margin from `1.3 ± 2.9` to `26.5 ± 4.5` in the other alliance's favour (`blue 274.0 ± 3.1`
+README.md          247.5      # README.md:113  against `red 247.5 ± 2.5`). Their area holds at
+README.md          266.3      # README.md:115  good-faith HUMAN PLAYER — cutting it to 1 leaves the ALLIANCE on `266.3 ± 2.7` against the default and takes
+README.md          267.4      # README.md:146  | the shipped reach, both ALLIANCES | blue `268.7 ± 2.8`, red `267.4 ± 2.6` against `291.6 ± 2.4 / 293.1 ± 2.2` with the
+README.md          291.6      # README.md:146  | the shipped reach, both ALLIANCES | blue `268.7 ± 2.8`, red `267.4 ± 2.6` against `291.6 ± 2.4 / 293.1 ± 2.2` with the
+README.md          293.1      # README.md:146  | the shipped reach, both ALLIANCES | blue `268.7 ± 2.8`, red `267.4 ± 2.6` against `291.6 ± 2.4 / 293.1 ± 2.2` with the
+README.md          22.9       # README.md:146  | the shipped reach, both ALLIANCES | blue `268.7 ± 2.8`, red `267.4 ± 2.6` against `291.6 ± 2.4 / 293.1 ± 2.2` with the
+README.md          39.0       # README.md:146  | the shipped reach, both ALLIANCES | blue `268.7 ± 2.8`, red `267.4 ± 2.6` against `291.6 ± 2.4 / 293.1 ± 2.2` with the
+README.md          279.8      # README.md:147  | blue as shipped, red at 0 | blue `274.0 ± 2.1`, red `279.8 ± 2.2`: margin `−5.8 ± 3.1`, paired margin shift vs neither
+README.md          17.96      # README.md:154  out of mesh: the two nets of a MATCH hold 18 rings between them and no more, so the column reads `17.96 → 16.46`
+README.md          16.46      # README.md:154  out of mesh: the two nets of a MATCH hold 18 rings between them and no more, so the column reads `17.96 → 16.46`
+README.md          18.00      # README.md:155  rings on the 9000 base and `18.00 → 16.50` on the 21000 (n=24 an arm), and the rings the ceiling turns away go
+README.md          16.50      # README.md:155  rings on the 9000 base and `18.00 → 16.50` on the 21000 (n=24 an arm), and the rings the ceiling turns away go
+README.md          8.63       # README.md:156  through the PROCESSOR (`8.63 → 9.42`, `8.13 → 9.04`), where they pay 6 rather than 4 and hand the opponent a
+README.md          9.42       # README.md:156  through the PROCESSOR (`8.63 → 9.42`, `8.13 → 9.04`), where they pay 6 rather than 4 and hand the opponent a
+README.md          8.13       # README.md:156  through the PROCESSOR (`8.63 → 9.42`, `8.13 → 9.04`), where they pay 6 rather than 4 and hand the opponent a
+README.md          1.38       # README.md:196  alone takes `1.38 ± 0.25` rings out of the two NETs on the 9000 base and `1.46 ± 0.35` on the 21000, and puts
+README.md          1.46       # README.md:196  alone takes `1.38 ± 0.25` rings out of the two NETs on the 9000 base and `1.46 ± 0.35` on the 21000, and puts
+README.md          2.11       # README.md:198  alone leaves the batch ahead on both bases (`+2.21 ± 2.11` / `+2.46 ± 2.23`) — but both #117 changes together no
+README.md          2.23       # README.md:198  alone leaves the batch ahead on both bases (`+2.21 ± 2.11` / `+2.46 ± 2.23`) — but both #117 changes together no
+README.md          3.88       # README.md:199  longer do: `+3.88 ± 4.26` on the 9000 base against `−5.46 ± 3.20` on the 21000, 21/24 and 24/24 of the MATCHes
+README.md          4.26       # README.md:199  longer do: `+3.88 ± 4.26` on the 9000 base against `−5.46 ± 3.20` on the 21000, 21/24 and 24/24 of the MATCHes
+README.md          5.46       # README.md:199  longer do: `+3.88 ± 4.26` on the 9000 base against `−5.46 ± 3.20` on the 21000, 21/24 and 24/24 of the MATCHes
+README.md          3.20       # README.md:199  longer do: `+3.88 ± 4.26` on the 9000 base against `−5.46 ± 3.20` on the 21000, 21/24 and 24/24 of the MATCHes
+README.md          1.508      # README.md:247  1.508–1.542 px/in. The build takes the fraction and its own datum rather than the raw pixels, which puts the line
+README.md          1.542      # README.md:247  1.508–1.542 px/in. The build takes the fraction and its own datum rather than the raw pixels, which puts the line
+README.md          60.5       # README.md:288  line): every one is handed a point standing **60.5 in** out from the structure and on its far side of the travel
+README.md          36.0       # README.md:292  `9.2` and `9.2` s, while a 2 in berth leaves a `36.0` s one behind it at `0.88%`, so 8 in is kept as the flat part
+README.md          0.88       # README.md:292  `9.2` and `9.2` s, while a 2 in berth leaves a `36.0` s one behind it at `0.88%`, so 8 in is kept as the flat part
+README.md          57.5       # README.md:294  symptom to `0.33%` and takes the Johnson preset from **57.5 CORAL an ALLIANCE to 55.0**, out of the ±4 band guard
+README.md          4.67       # README.md:297  leaves that column at **57.9**. On the generic trio the swing is worth **+4.67 ± 2.51** own points (24 paired
+README.md          2.51       # README.md:297  leaves that column at **57.9**. On the generic trio the swing is worth **+4.67 ± 2.51** own points (24 paired
+README.md          3.29       # README.md:298  seeds, base 9000, blue seat) and the same arm read from the other seat and the other base is `+3.29 ± 2.21`,
+README.md          2.06       # README.md:299  `+1.96 ± 2.06` and `−0.25 ± 3.47` — three of the four positive, the fourth a wash, and none of them clearing a
+README.md          3.47       # README.md:299  `+1.96 ± 2.06` and `−0.25 ± 3.47` — three of the four positive, the fourth a wash, and none of them clearing a
+README.md          6.21       # README.md:341  over the four arms of two fleets and two seed bases is **+5.50 ± 2.66**, **−3.92 ± 2.47**, **−6.21 ± 3.62** and
+README.md          3.62       # README.md:341  over the four arms of two fleets and two seed bases is **+5.50 ± 2.66**, **−3.92 ± 2.47**, **−6.21 ± 3.62** and
+README.md          5.92       # README.md:342  **+5.92 ± 2.73** (n=24 each) — two each way, every one inside about two errors of its own noise — and the two
+README.md          2.73       # README.md:342  **+5.92 ± 2.73** (n=24 each) — two each way, every one inside about two errors of its own noise — and the two
+README.md          57.7       # README.md:343  named preset columns it is priced against move from Johnson 56.8 to **57.7** and Newton 56.1 to **56.8** against
+README.md          56.1       # README.md:343  named preset columns it is priced against move from Johnson 56.8 to **57.7** and Newton 56.1 to **56.8** against
+README.md          14.0       # README.md:377  this file — was `+14.0 ± 0.6` and `+13.8 ± 0.7` before this round and reads **+13.1 ± 0.8** and **+13.0 ± 0.9**
+README.md          13.8       # README.md:377  this file — was `+14.0 ± 0.6` and `+13.8 ± 0.7` before this round and reads **+13.1 ± 0.8** and **+13.0 ± 0.9**
+README.md          3.00       # README.md:379  move: Johnson and Newton both stay at **3.00/0.00/0.00** DEEP with the roll in force, which is the recorded three
+README.md          34.5       # README.md:436  charging **2.7** foul points for it against the **34.5** the duty fleet really donates, most of which is traffic
+README.md          9.90       # README.md:438  docs implying one. The same guard reads the ALGAE column of that fleet at **9.90** rings against the engine's
+README.md          9.56       # README.md:439  **9.56**, and in a mirror, where both alliances run the duty, the three arms rank **−0.9 / −1.8 / −2.7** below
+README.md          21.3       # README.md:499  CAGEs against 3. The split the same guard prints — 22.9 / 21.3 / 13.5 and 21.8 / 21.0 / 14.0 against the
+README.md          13.5       # README.md:499  CAGEs against 3. The split the same guard prints — 22.9 / 21.3 / 13.5 and 21.8 / 21.0 / 14.0 against the
+README.md          306.7      # README.md:501  same shape and not close enough to call it fitted. Their TOTALS are `306.7` against the recorded 295 for
+README.md          306.5      # README.md:502  Johnson and `306.5` against 281 for Newton, of which 25 and 28 points is the PROCESSOR column each record does
+README.md          281.7      # README.md:503  not carry (4.2 and 4.6 ALGAE): take it out and they read 281.7 and 278.5 — 13.3 short of Johnson's 295 and 2.5
+README.md          278.5      # README.md:503  not carry (4.2 and 4.6 ALGAE): take it out and they read 281.7 and 278.5 — 13.3 short of Johnson's 295 and 2.5
+README.md          537.0      # README.md:701  MATCH where its own off value is asked for **0**, over the same 48-MATCH batch (**537.0** points with it against
+README.md          535.3      # README.md:702  **535.3** without) — but the tail it used to lift is level on this engine: the weakest ALLIANCE of 96 ends on
+README.md          30.6       # README.md:726  48-MATCH mirror batch the guard's margin used to read `30.6 ± 15.5`, then `4.00 ± 1.92` once the escape existed
+README.md          15.5       # README.md:726  48-MATCH mirror batch the guard's margin used to read `30.6 ± 15.5`, then `4.00 ± 1.92` once the escape existed
+README.md          1.95       # README.md:727  but the BARGE was on the wrong half, and now reads `−1.75 ± 1.95` (blue 265.6 ± 1.8 against red 267.4 ± 2.2).
+README.md          39.2       # README.md:734  at all. Over the guard's 48 alliance-sides the generic trio is at 39.2 AUTO CORAL points where Johnson took 63
+README.md          238.6      # README.md:738  the column out and the guard prints 238.6 — against a field that averaged
+README.md          260.56     # README.md:739  260.56 over its 32 playoff alliance-sides and topped out at 301. The mean is inside the real band either way, and
+README.md          239.0      # README.md:875  its total reads **239.0** against the **268.7** and **260.5** the engine plays out; its CORAL column is the
+README.md          260.5      # README.md:875  its total reads **239.0** against the **268.7** and **260.5** the engine plays out; its CORAL column is the
+README.md          41.0       # README.md:876  fitted one (**41.0** against **41.9**, and **40.0** against **39.6** on the second base). What is used for the search is
+README.md          40.0       # README.md:876  fitted one (**41.0** against **41.9**, and **40.0** against **39.6** on the second base). What is used for the search is
+README.md          1.607      # README.md:878  - It applied the fitted traffic factor (`efficiency`, fit at **1.607** and **1.637** on the two seed bases this
+README.md          1.637      # README.md:878  - It applied the fitted traffic factor (`efficiency`, fit at **1.607** and **1.637** on the two seed bases this
+README.md          144.6      # README.md:884  fleet asked at `t = 144.1` (max 144.6) and was on the pipe `4.70 s` later (max 5.80), finishing with
+README.md          4.70       # README.md:884  fleet asked at `t = 144.1` (max 144.6) and was on the pipe `4.70 s` later (max 5.80), finishing with
+web/index.html     1.181      # web/index.html:42  <p class="hint" title="The press is priced, not assigned: a seat compares one second of shadowing against one second of 
