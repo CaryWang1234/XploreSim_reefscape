@@ -124,6 +124,7 @@ const citationReG = new RegExp(`(?:npm run (${scripts.join('|')})|scripts\\/(${s
 // A clause citation is not a measurement: §6.5.1 contains "6.5" and Table 6-2 contains "6", and rule numbers
 // (R103, G303-D) contain integers. Stripping them keeps the report down to numbers that claim something.
 const stripCitations = (line) => line
+  .replace(/\b\d{1,3}\.\d{1,3}\.\d{1,3}(\.\d{1,3})?\b/g, ' ') // 127.0.0.1:4188 is where the page is served, not a mean
   .replace(/§\s*[\d.]+/g, ' ')
   .replace(/\bTable\s+[\d-]+/gi, ' ')
   .replace(/\bFigure\s+[\d-]+/gi, ' ')
